@@ -69,7 +69,6 @@ const main = async () => {
     const server = createAppServer({
       service,
       publicDir: join(root, "../public"),
-      moduleDir: join(root, "domain"),
     });
     const address = await listen(server, { port, host });
     console.log(`Open Property Comps at http://${address.host}:${address.port}`);

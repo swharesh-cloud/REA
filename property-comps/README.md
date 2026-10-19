@@ -16,7 +16,7 @@ npm test
 npm start
 ```
 
-Open http://127.0.0.1:4317 . The server binds to `127.0.0.1` unless you pass `--host`.
+Open http://127.0.0.1:4317 . The server binds to `127.0.0.1` unless you pass `--host`. On a phone-width browser, use Add to Home Screen. Chrome can use the button on the page; Safari uses the Share menu. The service worker caches the app shell only. Property searches still need the server.
 
 ```bash
 node src/cli.js search --source sample --query "maple"
@@ -28,6 +28,26 @@ node src/cli.js serve --port 4317
 ```
 
 `npm run test:live` calls the public Arizona services. The default `npm test` uses the sample dataset and recorded response fixtures, so it does not need network access.
+
+## Deploy on Vercel
+
+The folder is its own Vercel project. `npm start` stays the local server. The same API handlers live in [`api/`](api/) for Vercel, and [`vercel.json`](vercel.json) rewrites `/api/comps.csv` to the `api/comps-csv.js` function. Static files, including the manifest, service worker, and icons, are in [`public/`](public/).
+
+Project settings:
+
+| Setting | Value |
+| --- | --- |
+| Root Directory | `property-comps` |
+| Framework Preset | Other |
+| Node.js Version | 22.x |
+| Install Command | leave the default (`npm install`). There are no dependencies. |
+| Build Command | empty. Clear any command the dashboard fills in. There is no build step. |
+| Output Directory | empty. Do not set `public`. Vercel serves `public/` itself and keeps the `api/` functions. |
+| Environment variables | none. |
+
+No API keys, tokens, or other environment variables are read. Maricopa and Pinal are called from the functions over HTTPS. A home-screen install needs the deployment to be reachable by the phone. If Deployment Protection is on, the phone has to be allowed through it.
+
+`api/**` functions are configured for 60 seconds. A plan that caps functions below that will use the plan limit. County searches are usually a few seconds; a wide Maricopa radius can be slower.
 
 ## Sources
 

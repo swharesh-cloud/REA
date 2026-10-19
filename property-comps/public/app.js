@@ -380,4 +380,39 @@ const boot = async () => {
   showSourceNote();
 };
 
-boot().catch((error) => setStatus("search-status", error.message));
+const installHint = () => {
+  const standalone =
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.navigator.standalone === true;
+  const phone = window.matchMedia("(max-width: 800px)").matches;
+  byId("install-hint").hidden = standalone || !phone;
+};
+
+window.addEventListener("beforeinstallprompt", (event) => {
+  event.preventDefault();
+  const button = byId("install-button");
+  button.hidden = false;
+  button.addEventListener(
+    "click",
+    async () => {
+      button.hidden = true;
+      await event.prompt();
+    },
+    { once: true },
+  );
+});
+
+window.addEventListener("appinstalled", () => {
+  byId("install-button").hidden = true;
+  byId("install-hint").hidden = true;
+});
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}
+
+boot()
+  .then(installHint)
+  .catch((error) => setStatus("search-status", error.message));

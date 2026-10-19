@@ -17,14 +17,29 @@ test("http api searches sample records and exports csv", async () => {
   const server = createAppServer({
     service,
     publicDir: join(root, "../public"),
-    moduleDir: join(root, "../src/domain"),
   });
   const address = await listen(server, { port: 0, host: "127.0.0.1" });
   const base = `http://127.0.0.1:${address.port}`;
   try {
     const page = await fetch(`${base}/`);
     assert.equal(page.status, 200);
-    assert.match(await page.text(), /Open Property Comps/u);
+    const html = await page.text();
+    assert.match(html, /Open Property Comps/u);
+    assert.match(html, /manifest\.webmanifest/u);
+    assert.match(html, /theme-color/u);
+    assert.match(html, /apple-touch-icon/u);
+    const manifest = await fetch(`${base}/manifest.webmanifest`);
+    assert.equal(manifest.status, 200);
+    assert.match(manifest.headers.get("content-type"), /manifest/u);
+    const manifestBody = await manifest.json();
+    assert.equal(manifestBody.display, "standalone");
+    assert.equal(manifestBody.theme_color, "#0f6e56");
+    const worker = await fetch(`${base}/sw.js`);
+    assert.equal(worker.status, 200);
+    assert.match(await worker.text(), /addEventListener\("fetch"/u);
+    const icon = await fetch(`${base}/icons/icon-192.png`);
+    assert.equal(icon.status, 200);
+    assert.match(icon.headers.get("content-type"), /image\/png/u);
     const sources = await fetch(`${base}/api/sources`);
     const sourceBody = await sources.json();
     assert.deepEqual(
