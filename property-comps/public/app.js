@@ -21,16 +21,55 @@ const text = (value) => (value == null || value === "" ? "—" : String(value));
 
 const dollars = (value) => (value == null ? "—" : money.format(value));
 
-const setStatus = (id, message) => {
-  byId(id).textContent = message ?? "";
+const setStatus = (id, message, isError = false) => {
+  const node = byId(id);
+  node.textContent = message ?? "";
+  node.classList.toggle("error", Boolean(isError) && Boolean(message));
+};
+
+const failureMessage = (error) => {
+  const source = byId("source")?.value;
+  const base = error?.message || "The lookup failed.";
+  if (source && source !== "sample")
+    return `${base} Sample County still works from the source menu.`;
+  return base;
+};
+
+const showRecordError = (message) => {
+  const root = byId("record");
+  root.replaceChildren();
+  const note = document.createElement("p");
+  note.className = "error-box";
+  note.textContent = message;
+  root.append(note);
 };
 
 const paramsOf = (form) => new URLSearchParams(new FormData(form));
 
 const readJson = async (url) => {
-  const response = await fetch(url);
-  const body = await response.json();
-  if (!response.ok) throw new Error(body?.error?.message ?? "Request failed.");
+  let response;
+  try {
+    response = await fetch(url);
+  } catch {
+    throw new Error("The app could not reach its server. Check the connection and try again.");
+  }
+  const text = await response.text();
+  let body = null;
+  if (text.length > 0) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = null;
+    }
+  }
+  if (!response.ok || body == null || typeof body !== "object") {
+    const message =
+      body?.error?.message ??
+      (text.trim().startsWith("<")
+        ? `The server returned HTTP ${response.status} instead of property data. The lookup did not finish.`
+        : text.trim().slice(0, 180) || `Request failed (HTTP ${response.status}).`);
+    throw new Error(message);
+  }
   return body;
 };
 
@@ -307,11 +346,18 @@ const renderComps = (payload, exportUrl) => {
 
 const loadProperty = async (id) => {
   setStatus("search-status", "Loading record…");
-  const body = await readJson(
-    `/api/properties?source=${encodeURIComponent(byId("source").value)}&id=${encodeURIComponent(id)}`,
-  );
-  renderRecord(body.property);
-  setStatus("search-status", "");
+  try {
+    const body = await readJson(
+      `/api/properties?source=${encodeURIComponent(byId("source").value)}&id=${encodeURIComponent(id)}`,
+    );
+    if (!body.property) throw new Error("The server did not return a property record.");
+    renderRecord(body.property);
+    setStatus("search-status", "");
+  } catch (error) {
+    const message = failureMessage(error);
+    setStatus("search-status", message, true);
+    showRecordError(message);
+  }
 };
 
 const compQuery = () => {
@@ -348,7 +394,7 @@ byId("search-form").addEventListener("submit", async (event) => {
     const body = await readJson(`/api/search?${params.toString()}`);
     renderResults(body.results);
   } catch (error) {
-    setStatus("search-status", error.message);
+    setStatus("search-status", failureMessage(error), true);
   }
 });
 
@@ -366,7 +412,7 @@ byId("comps-form").addEventListener("submit", async (event) => {
     const body = await readJson(`/api/comps?${params.toString()}`);
     renderComps(body, `/api/comps.csv?${params.toString()}`);
   } catch (error) {
-    setStatus("comps-status", error.message);
+    setStatus("comps-status", failureMessage(error), true);
   }
 });
 
@@ -415,4 +461,4 @@ if ("serviceWorker" in navigator) {
 
 boot()
   .then(installHint)
-  .catch((error) => setStatus("search-status", error.message));
+  .catch((error) => setStatus("search-status", failureMessage(error), true));

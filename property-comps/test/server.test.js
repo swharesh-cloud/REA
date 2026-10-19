@@ -36,7 +36,12 @@ test("http api searches sample records and exports csv", async () => {
     assert.equal(manifestBody.theme_color, "#0f6e56");
     const worker = await fetch(`${base}/sw.js`);
     assert.equal(worker.status, 200);
-    assert.match(await worker.text(), /addEventListener\("fetch"/u);
+    const workerText = await worker.text();
+    assert.match(workerText, /addEventListener\("fetch"/u);
+    assert.match(
+      workerText,
+      /pathname\.startsWith\("\/api\/"\)[\s\S]*return;[\s\S]*respondWith/u,
+    );
     const icon = await fetch(`${base}/icons/icon-192.png`);
     assert.equal(icon.status, 200);
     assert.match(icon.headers.get("content-type"), /image\/png/u);

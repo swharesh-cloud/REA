@@ -144,6 +144,20 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   margin: 0 0 0.8rem;
 }
 
+.error-box {
+  background: #f8e6d8;
+  color: var(--warn);
+  border-radius: 8px;
+  padding: 0.7rem 0.8rem;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.status.error {
+  color: var(--warn);
+  font-weight: 650;
+}
+
 dl {
   display: grid;
   grid-template-columns: 9rem 1fr;

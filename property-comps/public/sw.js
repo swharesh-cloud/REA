@@ -1,4 +1,4 @@
-const CACHE = "property-comps-shell-v1";
+const CACHE = "property-comps-shell-v2";
 
 const SHELL = [
   "/",

@@ -15,10 +15,12 @@ import {
 } from "./arcgis.js";
 import { createCache } from "./http.js";
 
+// The Parcels MapServer answers the same query in several seconds. This
+// dynamic layer returns the same fields quickly enough for a serverless limit.
 const QUERY =
-  "https://gis.mcassessor.maricopa.gov/arcgis/rest/services/Parcels/MapServer/0/query";
+  "https://gis.mcassessor.maricopa.gov/arcgis/rest/services/MaricopaDynamicQueryService/MapServer/3/query";
 const SERVICE =
-  "https://gis.mcassessor.maricopa.gov/arcgis/rest/services/Parcels/MapServer/0";
+  "https://gis.mcassessor.maricopa.gov/arcgis/rest/services/MaricopaDynamicQueryService/MapServer/3";
 const PORTAL = "https://mcassessor.maricopa.gov/";
 
 const FIELDS = [

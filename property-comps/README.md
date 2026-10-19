@@ -54,8 +54,10 @@ No API keys, tokens, or other environment variables are read. Maricopa and Pinal
 | Id | What it is | Records |
 | --- | --- | --- |
 | `sample` | Fictional Sampleton, Arizona seed in [`data/sample-county.js`](data/sample-county.js) | Offline. Labeled `sample` on every record and in CSV `data_kind`. |
-| `maricopa` | [Maricopa County Assessor parcel layer](https://gis.mcassessor.maricopa.gov/arcgis/rest/services/Parcels/MapServer/0) | Owner, APN, property-use code, living area, year built, current full cash value, latest sale, latitude and longitude. |
+| `maricopa` | [Maricopa County Assessor dynamic parcel query](https://gis.mcassessor.maricopa.gov/arcgis/rest/services/MaricopaDynamicQueryService/MapServer/3) | Owner, APN, property-use code, living area, year built, current full cash value, latest sale, latitude and longitude. The older Parcels MapServer has the same fields but often takes longer than a serverless time limit. |
 | `pinal` | [Pinal County Assessor parcels](https://rogue.casagrandeaz.gov/arcgis/rest/services/Pinal_County/Pinal_County_Parcels/FeatureServer/0), described by the service as a nightly public extract | Owner, parcel id, use, floor area, year built, current assessed value, latest sale, and a centroid. |
+
+`GET /api/health` checks Sample County, Maricopa, and Pinal separately and returns each elapsed time. A county failure does not remove the sample source.
 
 No API key is required. Responses are cached in memory for five minutes. The app sends a descriptive User-Agent and caps radius (0.1–5 miles), candidate counts, and an open-ended sale window (three years when dates are omitted).
 

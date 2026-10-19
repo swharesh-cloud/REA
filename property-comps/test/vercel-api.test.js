@@ -7,6 +7,7 @@ import compsCsv from "../api/comps-csv.js";
 import properties from "../api/properties.js";
 import search from "../api/search.js";
 import sources from "../api/sources.js";
+import { dispatchApi } from "../src/server/dispatch.js";
 
 const call = (handler, path) => handler.fetch(new Request(`http://127.0.0.1${path}`));
 
@@ -52,6 +53,56 @@ test("vercel functions serve the same sample API as the local server", async () 
     new Request("http://127.0.0.1/api/sources", { method: "POST" }),
   );
   assert.equal(wrongMethod.status, 405);
+
+  const pathOnly = await properties.fetch({
+    url: "/api/properties?source=sample&id=sample:maple-100",
+    method: "GET",
+  });
+  assert.equal(pathOnly.status, 200);
+  assert.equal((await pathOnly.json()).property.parcelId, "SAMPLE-100");
+
+  const nodeResponse = await new Promise((resolve) => {
+    const response = {
+      statusCode: 0,
+      headers: {},
+      setHeader(name, value) {
+        this.headers[name] = value;
+      },
+      end(body) {
+        resolve({ statusCode: this.statusCode, body });
+      },
+    };
+    properties(
+      { url: "/api/properties?source=sample&id=sample:maple-100", method: "GET" },
+      response,
+    );
+  });
+  assert.equal(nodeResponse.statusCode, 200);
+  assert.match(nodeResponse.body, /SAMPLE-100/u);
+});
+
+test("health reports each source without letting one county hide sample", async () => {
+  const service = {
+    async getProperty(sourceId, id) {
+      if (sourceId === "maricopa") throw new Error("Maricopa did not respond in time.");
+      return { property: { parcelId: id } };
+    },
+  };
+  const result = await dispatchApi(service, {
+    method: "GET",
+    pathname: "/api/health",
+    searchParams: new URLSearchParams(),
+  });
+  assert.equal(result.status, 200);
+  const body = JSON.parse(result.body);
+  assert.equal(body.ok, false);
+  assert.deepEqual(
+    body.sources.map((source) => source.id),
+    ["sample", "maricopa", "pinal"],
+  );
+  assert.equal(body.sources.find((source) => source.id === "sample").ok, true);
+  assert.equal(body.sources.find((source) => source.id === "maricopa").ok, false);
+  assert.match(body.sources.find((source) => source.id === "maricopa").detail, /did not respond/u);
 });
 
 test("home-screen icons are real PNGs at the required sizes", async () => {
