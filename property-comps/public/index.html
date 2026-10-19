@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Open Property Comps</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div>
+        <p class="eyebrow">Public records</p>
+        <h1>Open Property Comps</h1>
+      </div>
+      <p class="lede">
+        Look up an Arizona address or parcel, read the assessment record, and
+        compare nearby sales. Sample County is a fictional Arizona set and
+        works offline. Maricopa and Pinal read free public assessor data.
+      </p>
+    </header>
+    <main>
+      <section class="panel" aria-labelledby="search-heading">
+        <h2 id="search-heading">Find a property</h2>
+        <form id="search-form">
+          <label>
+            Source
+            <select id="source" name="source"></select>
+          </label>
+          <label class="grow">
+            Address or parcel
+            <input
+              id="query"
+              name="q"
+              type="search"
+              placeholder="100 Maple, SAMPLE-100, or a street"
+              required
+              minlength="2"
+            />
+          </label>
+          <button type="submit">Search</button>
+        </form>
+        <p id="source-note" class="note"></p>
+        <p id="search-status" class="status" role="status"></p>
+        <ul id="results" class="results"></ul>
+      </section>
+
+      <section class="panel" aria-labelledby="record-heading">
+        <h2 id="record-heading">Property record</h2>
+        <div id="record">
+          <p class="empty">Search, then choose a property.</p>
+        </div>
+      </section>
+
+      <section class="panel wide" aria-labelledby="comps-heading">
+        <h2 id="comps-heading">Nearby sales</h2>
+        <form id="comps-form">
+          <label>
+            Radius (miles)
+            <input id="radius" name="radiusMiles" type="number" min="0.1" max="5" step="0.1" value="0.5" />
+          </label>
+          <label>
+            Type
+            <select id="property-type" name="propertyType">
+              <option value="">Any</option>
+            </select>
+          </label>
+          <label>
+            Min sqft
+            <input id="min-sqft" name="minSqft" type="number" min="1" step="1" />
+          </label>
+          <label>
+            Max sqft
+            <input id="max-sqft" name="maxSqft" type="number" min="1" step="1" />
+          </label>
+          <label>
+            Sold after
+            <input id="sold-after" name="soldAfter" type="date" />
+          </label>
+          <label>
+            Sold before
+            <input id="sold-before" name="soldBefore" type="date" />
+          </label>
+          <button type="submit" id="comps-button" disabled>Find comps</button>
+          <button type="button" id="use-type" disabled>Use subject type</button>
+        </form>
+        <p id="comps-status" class="status" role="status"></p>
+        <div id="stats" class="stats" hidden></div>
+        <div id="map" class="map" aria-label="Map of the subject and comparable sales"></div>
+        <p class="map-credit">Map tiles © OpenStreetMap contributors</p>
+        <div class="table-wrap">
+          <table>
+            <caption class="sr-only">Comparable sales</caption>
+            <thead>
+              <tr>
+                <th>Address</th>
+                <th>Parcel</th>
+                <th>Type</th>
+                <th>Sqft</th>
+                <th>Year</th>
+                <th>Sold</th>
+                <th>Price</th>
+                <th>$/sqft</th>
+                <th>Miles</th>
+              </tr>
+            </thead>
+            <tbody id="comps-body"></tbody>
+          </table>
+        </div>
+        <p class="export-row">
+          <a id="export" hidden href="#">Download CSV</a>
+        </p>
+      </section>
+    </main>
+    <footer>
+      <p>
+        Assessment and sale figures come from the selected public source, or
+        from the labeled sample file. They are not an appraisal. This app does
+        not use listing-service data.
+      </p>
+    </footer>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

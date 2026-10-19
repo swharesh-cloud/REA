@@ -1,0 +1,223 @@
+:root {
+  color-scheme: light;
+  --ink: #1c1915;
+  --muted: #5c564c;
+  --paper: #f6f1e7;
+  --panel: #fffaf3;
+  --line: #e2d8c8;
+  --accent: #0f6e56;
+  --accent-ink: #ffffff;
+  --warn: #8a4b08;
+  --sample: #f3e1b5;
+  --shadow: 0 1px 0 rgb(28 25 21 / 4%);
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.site-header, main, footer {
+  width: min(1120px, calc(100% - 2rem));
+  margin: 0 auto;
+}
+
+.site-header { padding: 2rem 0 0.5rem; }
+
+.eyebrow {
+  margin: 0;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  color: var(--accent);
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+h1 { margin: 0.2rem 0; font-size: 2.4rem; font-weight: 650; }
+
+.lede, .note, .status, footer p, .map-credit {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.lede { max-width: 46rem; }
+
+main {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  padding-bottom: 2rem;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1rem 1rem 1.1rem;
+  box-shadow: var(--shadow);
+}
+
+.wide { grid-column: 1 / -1; }
+
+h2 { margin: 0 0 0.8rem; font-size: 1.25rem; }
+
+form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  align-items: end;
+}
+
+label {
+  display: grid;
+  gap: 0.25rem;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.grow { flex: 1 1 16rem; }
+
+input, select, button {
+  font: inherit;
+  color: var(--ink);
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.45rem 0.55rem;
+}
+
+button {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: transparent;
+  cursor: pointer;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.results { list-style: none; margin: 0.6rem 0 0; padding: 0; display: grid; gap: 0.4rem; }
+
+.results button {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+.results button small { display: block; color: var(--muted); }
+
+.banner {
+  background: var(--sample);
+  color: var(--warn);
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+  margin: 0 0 0.8rem;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: 9rem 1fr;
+  gap: 0.35rem 0.8rem;
+  margin: 0;
+}
+
+dt { color: var(--muted); }
+dd { margin: 0; }
+
+.sales { width: 100%; border-collapse: collapse; margin-top: 0.8rem; }
+
+.sales th, .sales td, .table-wrap th, .table-wrap td {
+  text-align: left;
+  padding: 0.4rem 0.45rem;
+  border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 0.92rem;
+}
+
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 0.8rem 0;
+}
+
+.stats div {
+  background: #e7f3ee;
+  border-radius: 999px;
+  padding: 0.35rem 0.75rem;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+.map {
+  position: relative;
+  height: 420px;
+  overflow: auto;
+  background: #d7e2dc;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+}
+
+.map-stage { position: relative; }
+
+.map-stage img {
+  position: absolute;
+  width: 256px;
+  height: 256px;
+}
+
+.marker {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  border: 2px solid white;
+  background: #0b3d91;
+  padding: 0;
+}
+
+.marker.subject {
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  background: var(--accent);
+  transform: rotate(45deg);
+  border-radius: 2px;
+}
+
+.table-wrap { overflow-x: auto; margin-top: 0.8rem; }
+
+tr.active { background: #e7f3ee; }
+
+.empty { color: var(--muted); }
+
+.export-row { margin: 0.8rem 0 0; }
+
+a { color: var(--accent); }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+footer { padding-bottom: 2rem; }
+
+@media (max-width: 800px) {
+  main { grid-template-columns: 1fr; }
+  h1 { font-size: 2rem; }
+  .map { height: 320px; }
+}

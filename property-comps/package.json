@@ -1,0 +1,15 @@
+{
+  "name": "property-comps",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local property records and comparable sales from public open data, with a fictional sample county for offline use.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/cli.js serve",
+    "test": "node --test",
+    "test:live": "PROPERTY_COMPS_LIVE=1 node --test test/live.test.js"
+  }
+}
