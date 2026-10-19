@@ -63,3 +63,20 @@ test("live Arizona comps", { skip: !live, timeout: 90_000 }, async () => {
   assert.equal(pinal.subject.kind, "public");
   assert.equal(pinal.subject.propertyType, "Residential");
 });
+
+test("live Maricopa commercial debt index", { skip: !live, timeout: 40_000 }, async () => {
+  const service = createPropertyService(createRegistry());
+  const { property } = await service.getProperty("maricopa", "maricopa:102-01-260");
+  assert.equal(property.propertyType, "Commercial");
+  assert.equal(property.owner, "YAM WESTGATE LLC");
+  assert.equal(property.debt.status, "indexed");
+  assert.equal(property.debt.match.confidence, "name-only");
+  assert.ok(property.debt.documents.some((document) => document.role === "deed-of-trust"));
+  assert.ok(property.debt.documents.every((document) => document.loanAmount == null));
+  assert.ok(property.debt.documents.every((document) => document.maturityDate == null));
+  assert.ok(
+    property.debt.documents.every((document) =>
+      document.documentUrl.startsWith("https://recorder.maricopa.gov/recdocdata/GetRecDataDetail.aspx?rec="),
+    ),
+  );
+});

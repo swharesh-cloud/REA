@@ -1,3 +1,5 @@
+import { PROPERTY_TYPES } from "./property.js";
+
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/u;
 
 const fail = (message) => ({ ok: false, message });
@@ -37,6 +39,14 @@ const optionalSqft = (value, label) => {
   if (parsed < 1 || parsed > 2_000_000)
     return fail(`${label} must be between 1 and 2,000,000.`);
   return ok(parsed);
+};
+
+export const parsePropertyTypeFilter = (value) => {
+  const text = textParam(value, 40);
+  if (text.length === 0) return ok(null);
+  const match = PROPERTY_TYPES.find((type) => type.toUpperCase() === text.toUpperCase());
+  if (!match || match === "Unknown") return fail("Choose a property type from the list.");
+  return ok(match);
 };
 
 export const parseSearchQuery = (value) => {

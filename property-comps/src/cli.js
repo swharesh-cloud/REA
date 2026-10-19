@@ -29,7 +29,7 @@ const flags = (args) => {
 const help = `Open Property Comps
 
   node src/cli.js serve [--port 4317] [--host 127.0.0.1]
-  node src/cli.js search --source sample --query "maple"
+  node src/cli.js search --source sample --query "maple" [--type Commercial]
   node src/cli.js record --source sample --id sample:maple-100
   node src/cli.js comps --source sample --subject sample:maple-100 [--radius 0.5]
       [--type Residential] [--min-sqft 1400] [--max-sqft 2200]
@@ -75,7 +75,9 @@ const main = async () => {
     return;
   }
   if (command === "search") {
-    console.log(JSON.stringify(await service.search(parsed.source, parsed.query), null, 2));
+    console.log(
+      JSON.stringify(await service.search(parsed.source, parsed.query, parsed.type), null, 2),
+    );
     return;
   }
   if (command === "record") {

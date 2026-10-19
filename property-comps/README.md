@@ -2,7 +2,9 @@
 
 Local Arizona property-record and comparable-sales app. It lives in its own folder and does not plug into the reverse-engineering CLI or MCP server in the rest of this repository.
 
-Search an address or parcel, read the assessment record, and list nearby sales in a table and on a map. Summary stats are the count, median dollars per square foot, and sale-price range. Results export to CSV.
+Search an address or parcel, read the assessment record, and list nearby sales in a table and on a map. Summary stats are the count, median dollars per square foot, and sale-price range. Results export to CSV. The search form and the comps form can both limit results to a property type, including commercial.
+
+Commercial property records also show recorded debt. Sample County includes fictional loan terms so the section can be tried offline. Maricopa reads the recorder's public document index. Pinal opens the official recorder search instead of calling it.
 
 The lookup-then-nearby-sales workflow is a common assessor workflow. This app does not use listing services and does not scrape commercial comps sites. Live records come from free public Arizona open-data services. The bundled Sample County file is fictional and set in Arizona.
 
@@ -75,6 +77,25 @@ These public services were checked and not wired up, because they do not current
 - Yavapai County publishes parcel boundaries, and sells the assessor ownership, sales, and improvement tables.
 - AZGeo's statewide [parcel cache](https://azgeo.az.gov/arcgis/rest/services/TerraSystems/AZParcelFeatures/FeatureServer/0) exposes APN, address, and place name only.
 
+## Recorded debt
+
+Shown only on commercial records. Deeds of trust, mortgages, assignments, releases, and partial releases are the instrument types requested. Match confidence is labeled on each row.
+
+| Field | Sample County | Maricopa | Pinal |
+| --- | --- | --- | --- |
+| Instrument type | Fictional | Yes. Public index codes `DT` deed of trust, `MG` mortgage, `AS` assignment, `DR` release of deed of trust, `PR` partial release, `MR` release of mortgage | Not loaded. Open the recorder search |
+| Recording date | Fictional | Yes, from the index | Not loaded |
+| Document number | Fictional | Yes, recording number, linked to the official detail page | Not loaded. Acclaim can show a fee number in a browser |
+| Lender | Fictional, labeled sample | Not a field. Other party names are listed. A name that looks like a bank or lender and is not the assessor owner is marked "possible lender" | Not loaded |
+| Loan amount | Fictional | Not in the index. The cell says so | Not in a free API. It is on the document image |
+| Maturity | Fictional | Not in the index. The cell says so | Not in a free API |
+| Parcel match | Attached to the sample parcel | Name only. The index has no APN, address, or legal description | Not matched. The link is not a parcel search |
+| Assignments and releases | Fictional examples | Yes, when the owner name is on that document | Not loaded |
+
+Maricopa calls `https://publicapi.recorder.maricopa.gov`. Search is by business name, or last and first name, plus document code and an ISO date window of 15 years ending at the index date (`/documents/index`). Party names for up to 12 documents come from `/documents/{recordingNumber}`. Results are cached in memory for five minutes. A failed lookup still returns the assessor record, with links to [the recorder name index](https://recorder.maricopa.gov/recdocdata/) and the [two-year full-text search](https://recorder.maricopa.gov/recording/document-search.html). The name index caps a query at 500 hits and does not accept a parcel number.
+
+Pinal's recorder is [Acclaim Web](https://acclaim.pinalcountyaz.gov/acclaimweb/). Automated requests from this app got HTTP 403, a bot check, and no public JSON or ArcGIS document layer was found. The commercial record links to the name search and the legal-description search and says they are not prefilled. In a browser, an opened document can show record date, fee number, document type, names, legal description, and sometimes a parcel number. Loan amount and maturity stay on the image.
+
 ## Limitations
 
 - Maricopa and Pinal each publish the latest sale on the parcel, not a multi-year deed history.
@@ -83,3 +104,4 @@ These public services were checked and not wired up, because they do not current
 - Non-positive prices stay on the property history and are excluded from comps. Dollars per square foot is omitted when building area is missing or zero.
 - The map uses OpenStreetMap tiles in the browser. The table, stats, and CSV do not need tiles. Sample County still resolves without calling a data API.
 - Public extracts go stale and contain non-market transfers. This is not an appraisal.
+- A name-only deed of trust is not proof of a lien on that parcel. The same owner can have other property. Loan amount and maturity require the recorded document.

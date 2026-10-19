@@ -1,6 +1,7 @@
 import {
   PROPERTY_TYPES,
   classifyPropertyType,
+  matchesPropertyType,
   nextIsoDate,
   parseAmount,
   parseCoordinate,
@@ -109,6 +110,26 @@ export const pinalSearchWhere = (text) =>
     parcelClause: parcelClause(text),
   });
 
+const USE_TOKENS = {
+  Commercial: ["COMMERCIAL", "RETAIL", "OFFICE", "HOTEL", "MOTEL", "RESORT"],
+  Residential: ["RESIDENTIAL"],
+  Industrial: ["INDUSTRIAL", "WAREHOUSE", "MANUFACTURING"],
+  Vacant: ["VACANT"],
+};
+
+/** Use-description constraint. Property class is omitted because industrial rows are also labeled commercial there. */
+export const pinalTypeWhere = (propertyType) => {
+  const tokens = USE_TOKENS[propertyType];
+  if (!tokens) return null;
+  return tokens
+    .map((token) => {
+      if (!/^[A-Z0-9]+$/u.test(token))
+        throw appError("bad_request", "Search text could not be encoded safely.");
+      return `UPPER(Assessing_Use_Description) LIKE '%${token}%'`;
+    })
+    .join(" OR ");
+};
+
 const isoLiteral = (iso) => {
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(iso))
     throw appError("bad_request", "Invalid sale date.");
@@ -145,20 +166,23 @@ export const createPinalSource = ({
     label: "Pinal County",
     kind: "public",
     description:
-      "Pinal County Assessor parcels published on a public ArcGIS service. Includes owner, use, floor area, year built, assessed value, and the latest sale.",
+      "Pinal County Assessor parcels published on a public ArcGIS service. Includes owner, use, floor area, year built, assessed value, and the latest sale. Commercial records link to the recorder search; that site is not queried automatically.",
     propertyTypes: PROPERTY_TYPES,
-    async search(text) {
+    async search(text, filters = {}) {
       const where = pinalSearchWhere(text);
       if (!where) return [];
+      const typeWhere = pinalTypeWhere(filters.propertyType);
       const result = await query({
-        where,
+        where: typeWhere ? `(${where}) AND (${typeWhere})` : where,
         outFields: FIELDS,
         returnGeometry: "false",
         returnCentroid: "true",
         outSR: "4326",
         resultRecordCount: "15",
       });
-      return mapFeatures(result.features);
+      const records = mapFeatures(result.features);
+      if (!filters.propertyType) return records;
+      return records.filter((record) => matchesPropertyType(record, filters.propertyType));
     },
     async getProperty(id) {
       const local = id.startsWith("pinal:") ? id.slice("pinal:".length) : "";

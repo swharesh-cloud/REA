@@ -67,7 +67,7 @@ export const parseRecordDate = (value) => {
   const text = String(value).trim();
   const iso = /^(\d{4})-(\d{2})-(\d{2})/u.exec(text);
   if (iso) return calendarDate(iso[1], iso[2], iso[3]);
-  const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/u.exec(text);
+  const us = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/u.exec(text);
   if (!us) return null;
   return calendarDate(us[3], us[1].padStart(2, "0"), us[2].padStart(2, "0"));
 };

@@ -30,6 +30,7 @@ const property = (fields) => ({
     ? { latitude: null, longitude: null }
     : place(fields.northMiles, fields.eastMiles)),
   sales: fields.sales,
+  ...(fields.debtDocuments ? { debtDocuments: fields.debtDocuments } : {}),
 });
 
 export const SAMPLE_DATASET = {
@@ -131,6 +132,41 @@ export const SAMPLE_DATASET = {
       northMiles: -0.05,
       eastMiles: -0.2,
       sales: [{ date: "2024-06-06", price: 900000 }],
+      debtDocuments: [
+        {
+          role: "deed-of-trust",
+          documentType: "DEED OF TRUST",
+          recordedAt: "2024-06-06",
+          documentNumber: "SAMPLE-DT-050",
+          pages: 12,
+          parties: ["Sample Goods LLC", "Sample County Bank"],
+          possibleLenders: ["Sample County Bank"],
+          loanAmount: 640000,
+          maturityDate: "2034-06-01",
+        },
+        {
+          role: "assignment",
+          documentType: "ASSIGNMENT OF DEED OF TRUST",
+          recordedAt: "2025-02-02",
+          documentNumber: "SAMPLE-AS-050",
+          pages: 3,
+          parties: ["Sample County Bank", "Sample Goods LLC", "Fictional Assignee Bank"],
+          possibleLenders: ["Fictional Assignee Bank"],
+          loanAmount: null,
+          maturityDate: null,
+        },
+        {
+          role: "release",
+          documentType: "RELEASE OF DEED OF TRUST",
+          recordedAt: "2019-04-04",
+          documentNumber: "SAMPLE-DR-050",
+          pages: 2,
+          parties: ["Sample Goods LLC", "Earlier Sample Lender"],
+          possibleLenders: [],
+          loanAmount: null,
+          maturityDate: null,
+        },
+      ],
     }),
     property({
       localId: "birch-77",
@@ -265,6 +301,19 @@ export const SAMPLE_DATASET = {
       northMiles: 0.32,
       eastMiles: 0.12,
       sales: [{ date: "2025-03-03", price: 750000 }],
+      debtDocuments: [
+        {
+          role: "mortgage",
+          documentType: "MORTGAGE",
+          recordedAt: "2025-03-03",
+          documentNumber: "SAMPLE-MG-060",
+          pages: 8,
+          parties: ["Sample Retail LLC", "Sample Town Lender"],
+          possibleLenders: ["Sample Town Lender"],
+          loanAmount: 500000,
+          maturityDate: "2035-03-01",
+        },
+      ],
     }),
     property({
       localId: "small-12",

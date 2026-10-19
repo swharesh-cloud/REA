@@ -73,6 +73,23 @@ const readJson = async (url) => {
   return body;
 };
 
+const fillTypeSelect = (select, types) => {
+  const current = select.value;
+  select.replaceChildren();
+  const any = document.createElement("option");
+  any.value = "";
+  any.textContent = "Any";
+  select.append(any);
+  for (const type of types) {
+    if (type === "Unknown") continue;
+    const option = document.createElement("option");
+    option.value = type;
+    option.textContent = type;
+    select.append(option);
+  }
+  select.value = [...select.options].some((option) => option.value === current) ? current : "";
+};
+
 const fillSources = (sources) => {
   const select = byId("source");
   select.replaceChildren();
@@ -82,21 +99,9 @@ const fillSources = (sources) => {
     option.textContent = source.label;
     select.append(option);
   }
-  const types = byId("property-type");
-  const current = types.value;
-  types.replaceChildren();
-  const any = document.createElement("option");
-  any.value = "";
-  any.textContent = "Any";
-  types.append(any);
-  for (const type of sources[0]?.propertyTypes ?? []) {
-    if (type === "Unknown") continue;
-    const option = document.createElement("option");
-    option.value = type;
-    option.textContent = type;
-    types.append(option);
-  }
-  types.value = current;
+  const types = sources[0]?.propertyTypes ?? [];
+  fillTypeSelect(byId("property-type"), types);
+  fillTypeSelect(byId("search-type"), types);
 };
 
 const showSourceNote = () => {
@@ -133,6 +138,112 @@ const fact = (list, label, value) => {
   const definition = document.createElement("dd");
   definition.textContent = value;
   list.append(term, definition);
+};
+
+const renderDebt = (root, debt) => {
+  if (!debt?.applies) return;
+  const section = document.createElement("section");
+  section.className = "debt";
+  const heading = document.createElement("h3");
+  heading.textContent = "Recorded debt";
+  section.append(heading);
+  const summary = document.createElement("p");
+  summary.className = debt.status === "sample" ? "banner" : "note";
+  summary.textContent = debt.match?.label ?? "";
+  section.append(summary);
+  for (const limitation of debt.limitations ?? []) {
+    const note = document.createElement("p");
+    note.className = "note";
+    note.textContent = limitation;
+    section.append(note);
+  }
+  if (debt.truncated) {
+    const note = document.createElement("p");
+    note.className = "note";
+    note.textContent = "This list is incomplete. The recorder cap or the detail limit was reached. Use the official search for the rest.";
+    section.append(note);
+  }
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap";
+  const table = document.createElement("table");
+  table.className = "sales";
+  const caption = document.createElement("caption");
+  caption.textContent = "Recorded debt";
+  table.append(caption);
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const label of ["Instrument", "Recorded", "Document", "Possible lender", "Loan amount", "Maturity", "Match"]) {
+    const cell = document.createElement("th");
+    cell.textContent = label;
+    headRow.append(cell);
+  }
+  head.append(headRow);
+  const body = document.createElement("tbody");
+  const documents = debt.documents ?? [];
+  if (documents.length === 0) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 7;
+    cell.textContent = debt.status === "manual"
+      ? "No documents were loaded. Use the official recorder search below."
+      : "No deed of trust, mortgage, assignment, or release was indexed for this owner.";
+    row.append(cell);
+    body.append(row);
+  }
+  for (const entry of documents) {
+    const row = document.createElement("tr");
+    const instrument = document.createElement("td");
+    instrument.textContent = entry.roleLabel ?? entry.documentType;
+    if (entry.parties?.length) {
+      const parties = document.createElement("small");
+      parties.textContent = entry.parties.join("; ");
+      instrument.append(parties);
+    }
+    const recorded = document.createElement("td");
+    recorded.textContent = text(entry.recordedAt);
+    const number = document.createElement("td");
+    if (entry.documentUrl) {
+      const anchor = document.createElement("a");
+      anchor.href = entry.documentUrl;
+      anchor.textContent = entry.documentNumber;
+      anchor.rel = "noreferrer";
+      anchor.target = "_blank";
+      number.append(anchor);
+    } else number.textContent = entry.documentNumber;
+    const lender = document.createElement("td");
+    lender.textContent = entry.possibleLenders?.length
+      ? entry.possibleLenders.join("; ")
+      : "Not labeled";
+    const missing = debt.status === "sample" ? "—" : "Not in the public index";
+    const amount = document.createElement("td");
+    amount.textContent = entry.loanAmount == null ? missing : dollars(entry.loanAmount);
+    const maturity = document.createElement("td");
+    maturity.textContent = entry.maturityDate == null ? missing : entry.maturityDate;
+    const match = document.createElement("td");
+    match.textContent = entry.confidence === "name-only"
+      ? "Name only"
+      : entry.confidence === "sample"
+        ? "Sample"
+        : text(entry.confidence);
+    row.append(instrument, recorded, number, lender, amount, maturity, match);
+    body.append(row);
+  }
+  table.append(head, body);
+  wrap.append(table);
+  section.append(wrap);
+  for (const link of debt.links ?? []) {
+    const note = document.createElement("p");
+    note.className = "note";
+    const anchor = document.createElement("a");
+    anchor.href = link.href;
+    anchor.textContent = link.name;
+    anchor.rel = "noreferrer";
+    anchor.target = "_blank";
+    note.append(anchor);
+    if (link.note) note.append(document.createTextNode(` ${link.note}`));
+    section.append(note);
+  }
+  root.append(section);
 };
 
 const renderRecord = (property) => {
@@ -193,6 +304,7 @@ const renderRecord = (property) => {
   }
   table.append(head, body);
   root.append(table);
+  renderDebt(root, property.debt);
   const links = property.provenance?.datasets ?? [];
   if (links.length > 0) {
     const note = document.createElement("p");

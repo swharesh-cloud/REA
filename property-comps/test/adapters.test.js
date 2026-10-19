@@ -7,6 +7,7 @@ import {
   mapMaricopaFeature,
   maricopaCandidateWhere,
   maricopaSearchWhere,
+  maricopaTypeWhere,
   maricopaUseDetail,
 } from "../src/adapters/maricopa-source.js";
 import {
@@ -14,6 +15,7 @@ import {
   mapPinalFeature,
   pinalCandidateWhere,
   pinalSearchWhere,
+  pinalTypeWhere,
 } from "../src/adapters/pinal-source.js";
 import { createSampleSource } from "../src/adapters/sample-source.js";
 import { parseRecordDate } from "../src/domain/property.js";
@@ -61,6 +63,16 @@ const pinalFeature = {
   centroid: { x: -111.75855, y: 32.767 },
 };
 
+test("commercial search keeps commercial sample parcels", async () => {
+  const source = createSampleSource();
+  const commercial = await source.search("sample", { propertyType: "Commercial" });
+  assert.ok(commercial.length >= 2);
+  assert.ok(commercial.every((record) => record.propertyType === "Commercial"));
+  assert.ok(commercial.some((record) => record.id === "sample:commercial-50"));
+  const houses = await source.search("maple", { propertyType: "Commercial" });
+  assert.equal(houses.length, 0);
+});
+
 test("sample search stays inside fictional Arizona records", async () => {
   const source = createSampleSource();
   const byStreet = await source.search("maple");
@@ -75,6 +87,7 @@ test("sample search stays inside fictional Arizona records", async () => {
 
 test("record dates accept Arizona assessor formats", () => {
   assert.equal(parseRecordDate("07/01/2018"), "2018-07-01");
+  assert.equal(parseRecordDate("3-26-2020"), "2020-03-26");
   assert.equal(parseRecordDate("2024-02-15"), "2024-02-15");
   assert.equal(parseRecordDate("02/31/2018"), null);
   assert.equal(parseRecordDate(1_704_067_200_000), "2024-01-01");
@@ -168,4 +181,16 @@ test("Pinal source sends an envelope and keeps the centroid", async () => {
   assert.match(decoded, /esriGeometryEnvelope/u);
   assert.match(decoded, /-111\.770000,32\.750000,-111\.740000,32\.780000/u);
   assert.match(decoded, /returnCentroid=true/u);
+});
+
+test("commercial type filters stay on assessor fields and ignore extra text", () => {
+  const maricopa = maricopaTypeWhere("Commercial");
+  assert.match(maricopa, /PUC LIKE '12%'/u);
+  assert.match(maricopa, /PUC LIKE '04%'/u);
+  assert.doesNotMatch(maricopa, /OR 1=1/u);
+  assert.equal(maricopaTypeWhere("Commercial' OR PUC LIKE '"), null);
+  const pinal = pinalTypeWhere("Commercial");
+  assert.match(pinal, /Assessing_Use_Description/u);
+  assert.doesNotMatch(pinal, /Property_Class/u);
+  assert.equal(pinalTypeWhere("Mixed"), null);
 });

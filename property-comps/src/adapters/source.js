@@ -3,7 +3,7 @@
  * size, sale date, and statistics) live in src/domain/comps.js. A source
  * may prefilter with a bounding box, and that box must contain the circle.
  *
- * search(text) -> PropertyRecord[]
+ * search(text, { propertyType }) -> PropertyRecord[]
  * getProperty(id) -> PropertyRecord | null
  * findCandidates({ box, soldAfter, soldBefore, limit }) ->
  *   { records, truncated, limit, notes }
@@ -12,6 +12,8 @@
  * id, sourceId, kind ("public" | "sample"), parcelId, address, owner,
  * propertyType, propertyTypeDetail, buildingSqft, yearBuilt, assessedValue,
  * assessmentNote, latitude, longitude, sales[{date, price}], provenance.
+ * Commercial records may include debt: recorded instruments, or a manual
+ * recorder link when the county index cannot be queried.
  */
 
 export const describeSource = (source) => ({

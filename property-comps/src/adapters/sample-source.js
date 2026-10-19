@@ -1,8 +1,44 @@
 import { SAMPLE_DATASET } from "../../data/sample-county.js";
-import { PROPERTY_TYPES, classifyPropertyType, normalizeParcel, propertyId, searchTokens } from "../domain/property.js";
+import { buildDebtDocument } from "../domain/debt.js";
+import {
+  PROPERTY_TYPES,
+  classifyPropertyType,
+  matchesPropertyType,
+  normalizeParcel,
+  propertyId,
+  searchTokens,
+} from "../domain/property.js";
+
+const sampleDebt = (row) => {
+  if (!Array.isArray(row.debtDocuments)) return null;
+  return {
+    status: "sample",
+    applies: true,
+    match: {
+      method: "sample",
+      confidence: "sample",
+      label: "Fictional sample match. These are not county recorder documents.",
+    },
+    documents: row.debtDocuments.map((document) =>
+      buildDebtDocument({
+        ...document,
+        documentUrl: null,
+        confidence: "sample",
+        confidenceLabel:
+          "Fictional sample document, attached to this parcel in the sample file.",
+      }),
+    ),
+    limitations: [
+      "SAMPLE DATA. The loan amount, lender, and maturity on this record are fictional. A live county index may not publish those fields.",
+    ],
+    links: [],
+    truncated: false,
+  };
+};
 
 const toRecord = (row) => {
   const classified = classifyPropertyType(row.propertyTypeDetail);
+  const debt = sampleDebt(row);
   return {
     id: propertyId("sample", row.localId),
     sourceId: "sample",
@@ -21,6 +57,7 @@ const toRecord = (row) => {
     sales: [...row.sales].sort((left, right) =>
       left.date < right.date ? 1 : left.date > right.date ? -1 : 0,
     ),
+    ...(debt ? { debt } : {}),
     provenance: {
       retrievedAt: null,
       kind: "sample",
@@ -61,8 +98,10 @@ export const createSampleSource = () => ({
   description:
     "Fictional Sample County, Arizona records for offline demonstration. Not a county assessor source.",
   propertyTypes: PROPERTY_TYPES,
-  async search(text) {
-    return RECORDS.filter((record) => matches(record, text)).slice(0, 15);
+  async search(text, filters = {}) {
+    return RECORDS.filter((record) => matches(record, text))
+      .filter((record) => matchesPropertyType(record, filters.propertyType ?? null))
+      .slice(0, 15);
   },
   async getProperty(id) {
     return RECORDS.find((record) => record.id === id) ?? null;

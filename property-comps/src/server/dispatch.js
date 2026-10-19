@@ -64,7 +64,14 @@ export const dispatchApi = async (service, { method, pathname, searchParams }) =
       return json(200, { sources: service.listSources() });
     if (pathname === "/api/health") return json(200, await healthReport(service));
     if (pathname === "/api/search")
-      return json(200, await service.search(searchParams.get("source"), searchParams.get("q")));
+      return json(
+        200,
+        await service.search(
+          searchParams.get("source"),
+          searchParams.get("q"),
+          searchParams.get("propertyType"),
+        ),
+      );
     if (pathname === "/api/properties")
       return json(
         200,

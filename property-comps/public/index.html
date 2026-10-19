@@ -31,8 +31,9 @@
       </div>
       <p class="lede">
         Look up an Arizona address or parcel, read the assessment record, and
-        compare nearby sales. Sample County is a fictional Arizona set and
-        works offline. Maricopa and Pinal read free public assessor data.
+        compare nearby sales. Commercial records also show recorded debt when
+        a free public recorder index has it. Sample County is a fictional
+        Arizona set and works offline.
       </p>
       <p id="install-hint" class="note" hidden>
         To keep this on your home screen, open the Share menu and tap Add to Home Screen.
@@ -45,6 +46,12 @@
           <label>
             Source
             <select id="source" name="source"></select>
+          </label>
+          <label>
+            Type
+            <select id="search-type" name="propertyType">
+              <option value="">Any</option>
+            </select>
           </label>
           <label class="grow">
             Address or parcel

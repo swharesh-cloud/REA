@@ -1,6 +1,7 @@
 import {
   PROPERTY_TYPES,
   classifyPropertyType,
+  matchesPropertyType,
   parseAmount,
   parseCoordinate,
   parseNumber,
@@ -53,6 +54,23 @@ const PUC_LABEL = {
 
 const NOTES =
   "The public parcel layer includes the latest recorded sale, not a multi-year deed history. FCV_CUR is the current full cash value used for assessment, not the sale price.";
+
+const PUC_FAMILIES = {
+  Commercial: [
+    "04", "05", "06", "10", "11", "12", "13", "14", "15", "16", "17", "18",
+    "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29",
+  ],
+  Residential: ["01", "03", "07", "08"],
+  Industrial: ["30", "31", "32", "33", "34", "35", "36", "37", "38", "39"],
+  Vacant: ["00"],
+};
+
+/** Assessor use-code constraint. Null means the county query cannot express that type. */
+export const maricopaTypeWhere = (propertyType) => {
+  const families = PUC_FAMILIES[propertyType];
+  if (!families) return null;
+  return families.map((family) => `PUC LIKE '${family}%'`).join(" OR ");
+};
 
 /** Coarse label for an Arizona Department of Revenue property-use family. */
 export const maricopaUseDetail = (code) => {
@@ -152,18 +170,21 @@ export const createMaricopaSource = ({
     label: "Maricopa County",
     kind: "public",
     description:
-      "Maricopa County Assessor public parcel layer. Includes owner, use code, living area, year built, full cash value, and the latest sale.",
+      "Maricopa County Assessor public parcel layer. Includes owner, use code, living area, year built, full cash value, and the latest sale. Commercial records also check the recorder's public document index for deeds of trust and related filings.",
     propertyTypes: PROPERTY_TYPES,
-    async search(text) {
+    async search(text, filters = {}) {
       const where = maricopaSearchWhere(text);
       if (!where) return [];
+      const typeWhere = maricopaTypeWhere(filters.propertyType);
       const result = await query({
-        where,
+        where: typeWhere ? `(${where}) AND (${typeWhere})` : where,
         outFields: FIELDS,
         returnGeometry: "false",
         resultRecordCount: "15",
       });
-      return mapFeatures(result.features);
+      const records = mapFeatures(result.features);
+      if (!filters.propertyType) return records;
+      return records.filter((record) => matchesPropertyType(record, filters.propertyType));
     },
     async getProperty(id) {
       const local = id.startsWith("maricopa:") ? id.slice("maricopa:".length) : "";

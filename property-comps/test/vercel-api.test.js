@@ -36,6 +36,23 @@ test("vercel functions serve the same sample API as the local server", async () 
   );
   const propertyBody = await propertyResponse.json();
   assert.equal(propertyBody.property.parcelId, "SAMPLE-100");
+  assert.equal(propertyBody.property.debt, null);
+
+  const commercialResponse = await call(
+    properties,
+    "/api/properties?source=sample&id=sample:commercial-50",
+  );
+  const commercialBody = await commercialResponse.json();
+  assert.equal(commercialBody.property.debt.status, "sample");
+  assert.equal(commercialBody.property.debt.documents[0].loanAmount, 640000);
+  assert.equal(commercialBody.property.debt.documents[0].documentUrl, null);
+
+  const commercialSearch = await call(
+    search,
+    "/api/search?source=sample&q=sample&propertyType=Commercial",
+  );
+  const commercialSearchBody = await commercialSearch.json();
+  assert.ok(commercialSearchBody.results.every((row) => row.propertyType === "Commercial"));
 
   const query =
     "/api/comps?source=sample&subjectId=sample:maple-100&radiusMiles=0.5&propertyType=Residential&minSqft=1400&maxSqft=2200&soldAfter=2023-01-01";
