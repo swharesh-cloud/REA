@@ -1,0 +1,15 @@
+{
+  "name": "northmark",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Northmark is an independent market charting and quant research terminal.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "start": "node scripts/serve.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
