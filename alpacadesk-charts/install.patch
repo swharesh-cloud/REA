@@ -1,0 +1,1389 @@
+diff -ruN tt-old/chart.py tt-new/chart.py
+--- tt-old/chart.py	2026-10-15 23:05:55.000000000 +0000
++++ tt-new/chart.py	2026-10-20 23:24:21.185899002 +0000
+@@ -1,52 +1,199 @@
+-"""/chart — TradingView-style portfolio chart page (Alpaca PAPER, read-only).
+-Uses TradingView Lightweight Charts™ (Apache-2.0), vendored in static/. No orders are ever placed from here."""
++"""/chart — AlpacaDesk charts (Alpaca PAPER, read-only).
++
++Candles, studies, drawings, and the backtest all stay on this page.
++Bars still come from the Alpaca market-data API. Nothing here submits,
++cancels, or closes an order, and nothing selects a live trading endpoint.
++Uses TradingView Lightweight Charts (Apache-2.0), vendored in static/.
++"""
+ import datetime as dt
++import json
++import math
++from pathlib import Path
++
+ import requests
+-from flask import Blueprint, jsonify, request, render_template_string
++from flask import Blueprint, jsonify, request
++
++import studies
+ from broker import Alpaca
+ 
+ bp = Blueprint("chart", __name__)
+ DATA = "https://data.alpaca.markets"
+ TFS = {"5m": ("5Min", 5), "15m": ("15Min", 15), "1H": ("1Hour", 60), "1D": ("1Day", 400), "1W": ("1Week", 1500)}
+ DAYS = {"5m": 5, "15m": 15, "1H": 60, "1D": 400, "1W": 1500}
++DRAWINGS = Path(__file__).resolve().parent / "sdesk" / "chart_drawings.json"
++MAX_DRAWINGS = 200
++
++
++def _sym(s):
++    return (s or "").strip().upper()
++
++
++def _is_crypto(s):
++    return "/" in s
++
++
++def _finite(value):
++    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
++
++
++def _load_bars(sym, tf):
++    """Same Alpaca data request the chart already used. Market data only."""
++    a = Alpaca()
++    start = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=DAYS[tf])).strftime("%Y-%m-%dT%H:%M:%SZ")
++    if _is_crypto(sym):
++        url, params = f"{DATA}/v1beta3/crypto/us/bars", dict(symbols=sym, timeframe=TFS[tf][0], start=start, limit=10000)
++    else:
++        url, params = f"{DATA}/v2/stocks/bars", dict(
++            symbols=sym, timeframe=TFS[tf][0], start=start, limit=10000, feed="iex", adjustment="split")
++    out, token = [], None
++    for _ in range(10):
++        if token:
++            params["page_token"] = token
++        response = requests.get(url, headers=a.headers, params=params, timeout=20)
++        response.raise_for_status()
++        payload = response.json()
++        out += (payload.get("bars") or {}).get(sym, [])
++        token = payload.get("next_page_token")
++        if not token:
++            break
++    rows = [dict(
++        time=int(dt.datetime.fromisoformat(bar["t"].replace("Z", "+00:00")).timestamp()),
++        open=bar["o"], high=bar["h"], low=bar["l"], close=bar["c"], volume=bar.get("v", 0),
++    ) for bar in out]
++    return rows[-5000:], ("crypto" if _is_crypto(sym) else "iex")
+ 
+-def _sym(s): return (s or "").strip().upper()
+-def _is_crypto(s): return "/" in s
+ 
+ @bp.get("/api/chart/bars")
+ def bars():
+     sym, tf = _sym(request.args.get("symbol")), request.args.get("tf", "1D")
+-    if not sym or tf not in TFS: return jsonify(ok=False, error="symbol and tf required"), 400
+-    a = Alpaca(); start = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=DAYS[tf])).strftime("%Y-%m-%dT%H:%M:%SZ")
+-    if _is_crypto(sym): url, p = f"{DATA}/v1beta3/crypto/us/bars", dict(symbols=sym, timeframe=TFS[tf][0], start=start, limit=10000)
+-    else: url, p = f"{DATA}/v2/stocks/bars", dict(symbols=sym, timeframe=TFS[tf][0], start=start, limit=10000, feed="iex", adjustment="split")
+-    out, tok = [], None
+-    try:
+-        for _ in range(10):
+-            if tok: p["page_token"] = tok
+-            r = requests.get(url, headers=a.headers, params=p, timeout=20); r.raise_for_status(); j = r.json()
+-            out += (j.get("bars") or {}).get(sym, []); tok = j.get("next_page_token")
+-            if not tok: break
+-    except Exception as e: return jsonify(ok=False, error=str(e)[:200]), 502
+-    rows = [dict(time=int(dt.datetime.fromisoformat(b["t"].replace("Z", "+00:00")).timestamp()), open=b["o"], high=b["h"], low=b["l"],
+-                 close=b["c"], volume=b.get("v", 0)) for b in out][-5000:]
+-    return jsonify(ok=True, symbol=sym, tf=tf, bars=rows, feed="crypto" if _is_crypto(sym) else "iex")
++    if not sym or tf not in TFS:
++        return jsonify(ok=False, error="symbol and tf required"), 400
++    try:
++        rows, feed = _load_bars(sym, tf)
++    except Exception as exc:
++        return jsonify(ok=False, error=str(exc)[:200]), 502
++    return jsonify(ok=True, symbol=sym, tf=tf, bars=rows, feed=feed, studies=studies.pack(rows, tf))
++
++
++@bp.post("/api/chart/backtest")
++def backtest():
++    """Replay a long/flat rule on freshly loaded bars. Does not place an order."""
++    body = request.get_json(silent=True)
++    if not isinstance(body, dict):
++        return jsonify(ok=False, error="json object required"), 400
++    sym, tf = _sym(body.get("symbol")), body.get("tf") or "1D"
++    if not sym or tf not in TFS:
++        return jsonify(ok=False, error="symbol and tf required"), 400
++    try:
++        rows, feed = _load_bars(sym, tf)
++    except Exception as exc:
++        return jsonify(ok=False, error=str(exc)[:200]), 502
++    try:
++        result = studies.run_backtest(rows, body)
++    except (TypeError, ValueError) as exc:
++        return jsonify(ok=False, error=str(exc)[:200]), 400
++    result.update(ok=True, symbol=sym, tf=tf, feed=feed)
++    return jsonify(result)
++
++
++def _symbol_ok(sym):
++    return bool(sym) and len(sym) <= 12 and all(ch.isalnum() or ch in "/.-" for ch in sym)
++
++
++def _read_drawings():
++    try:
++        data = json.loads(DRAWINGS.read_text(encoding="utf-8"))
++    except Exception:
++        return {}
++    return data if isinstance(data, dict) else {}
++
++
++def _write_drawings(data):
++    DRAWINGS.parent.mkdir(parents=True, exist_ok=True)
++    temporary = DRAWINGS.with_suffix(".json.tmp")
++    temporary.write_text(json.dumps(data, indent=2), encoding="utf-8")
++    temporary.replace(DRAWINGS)
++
++
++def _clean_drawing(item):
++    if not isinstance(item, dict):
++        return None
++    if item.get("kind") == "hline":
++        if not _finite(item.get("price")):
++            return None
++        return {"kind": "hline", "price": float(item["price"])}
++    if item.get("kind") != "trend":
++        return None
++
++    def point(value):
++        if not isinstance(value, dict) or not _finite(value.get("time")) or not _finite(value.get("price")):
++            return None
++        return {"time": int(round(value["time"])), "price": float(value["price"])}
++
++    first, second = point(item.get("a")), point(item.get("b"))
++    if first is None or second is None or first["time"] == second["time"]:
++        return None
++    if first["time"] > second["time"]:
++        first, second = second, first
++    return {"kind": "trend", "a": first, "b": second}
++
++
++@bp.get("/api/chart/drawings")
++def get_drawings():
++    sym = _sym(request.args.get("symbol"))
++    if not _symbol_ok(sym):
++        return jsonify(ok=False, error="bad symbol"), 400
++    stored = _read_drawings().get(sym, [])
++    return jsonify(ok=True, symbol=sym, drawings=stored if isinstance(stored, list) else [])
++
++
++@bp.post("/api/chart/drawings")
++def save_drawings():
++    """Replace one symbol's drawings in sdesk/chart_drawings.json. Does not touch strategy config."""
++    body = request.get_json(silent=True)
++    if not isinstance(body, dict):
++        return jsonify(ok=False, error="json object required"), 400
++    sym = _sym(body.get("symbol"))
++    if not _symbol_ok(sym):
++        return jsonify(ok=False, error="bad symbol"), 400
++    raw = body.get("drawings")
++    if not isinstance(raw, list) or len(raw) > MAX_DRAWINGS:
++        return jsonify(ok=False, error="drawings must be a list of at most %s" % MAX_DRAWINGS), 400
++    cleaned = []
++    for item in raw:
++        drawing = _clean_drawing(item)
++        if drawing is None:
++            return jsonify(ok=False, error="invalid drawing"), 400
++        cleaned.append(drawing)
++    data = _read_drawings()
++    if cleaned:
++        data[sym] = cleaned
++    else:
++        data.pop(sym, None)
++    _write_drawings(data)
++    return jsonify(ok=True, symbol=sym, drawings=cleaned)
++
+ 
+ @bp.get("/api/chart/positions")
+ def positions():
+     a = Alpaca()
+-    try: acct, ps = a.account(), a.positions()
+-    except Exception as e: return jsonify(ok=False, error=str(e)[:200]), 502
++    try:
++        acct, ps = a.account(), a.positions()
++    except Exception as e:
++        return jsonify(ok=False, error=str(e)[:200]), 502
+     eq, last = float(acct["equity"]), float(acct["last_equity"])
+     return jsonify(ok=True, equity=eq, day_pnl=eq - last, day_pnl_pct=(eq - last) / last * 100 if last else 0, positions=[dict(
+         symbol=p["symbol"], qty=float(p["qty"]), side=p["side"], avg_entry=float(p["avg_entry_price"]), last=float(p["current_price"]),
+         upl=float(p["unrealized_pl"]), uplpc=float(p["unrealized_plpc"]) * 100) for p in ps])
+ 
++
+ @bp.get("/api/chart/orders")
+ def orders():
+     sym = _sym(request.args.get("symbol")); a = Alpaca()
+-    try: os_ = a._req("GET", "/v2/orders", params={"status": "all", "limit": 500, "nested": "true", "symbols": sym, "direction": "desc"})
+-    except Exception as e: return jsonify(ok=False, error=str(e)[:200]), 502
++    try:
++        os_ = a._req("GET", "/v2/orders", params={"status": "all", "limit": 500, "nested": "true", "symbols": sym, "direction": "desc"})
++    except Exception as e:
++        return jsonify(ok=False, error=str(e)[:200]), 502
+     fills, lines = [], []
+     def walk(o):
+         if o.get("filled_at") and float(o.get("filled_qty") or 0) > 0:
+@@ -61,73 +208,170 @@
+     return jsonify(ok=True, fills=sorted(fills, key=lambda f: f["time"]), lines=lines,
+                    symbol_match=[o["symbol"] for o in os_ if o["symbol"].replace("/", "") != norm][:0])
+ 
+-BODY = """<div class="grid"><div class="card"><div style="display:flex;justify-content:space-between;align-items:center">
++
++BODY = """<style>
++#bt input{background:#1c1c1f;border:1px solid #3a3a40;color:#e7e7ea;border-radius:6px;padding:4px 6px;width:64px}
++#tfs{flex-wrap:wrap}
++</style>
++<div class="grid"><div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+ <div><span id="sym" style="font-size:20px;font-weight:800">—</span> <span id="px" style="font-size:20px;font-weight:800" class="up"></span></div>
+-<div style="display:flex;gap:8px;align-items:center"><input id="q" placeholder="Search symbol" style="background:#1c1c1f;border:1px solid #3a3a40;color:#e7e7ea;border-radius:8px;padding:6px 9px;width:130px">
+-<span class="muted">Interval</span><div class="seg" id="tfs"><button data-tf="5m">5 min</button><button data-tf="1H">1 hour</button><button data-tf="1D">1 day</button></div></div></div>
+-<div style="display:flex;justify-content:space-between;margin:10px 0 4px"><label><input type="checkbox" id="ma" checked> SMA 20 / 50 / 200 + VWAP</label><span class="muted" id="nb"></span></div>
++<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input id="q" placeholder="Search symbol" style="background:#1c1c1f;border:1px solid #3a3a40;color:#e7e7ea;border-radius:8px;padding:6px 9px;width:130px">
++<span class="muted">Interval</span><div class="seg" id="tfs"><button type="button" data-tf="5m">5 min</button><button type="button" data-tf="15m">15 min</button><button type="button" data-tf="1H">1 hour</button><button type="button" data-tf="1D">1 day</button><button type="button" data-tf="1W">1 week</button></div></div></div>
++<div style="display:flex;justify-content:space-between;gap:8px;margin:10px 0 4px;flex-wrap:wrap"><span>
++<label><input type="checkbox" id="sma" checked> SMA 20/50/200</label>
++<label><input type="checkbox" id="ema"> EMA 20</label>
++<label><input type="checkbox" id="bb"> Bollinger 20,2</label>
++<label><input type="checkbox" id="vwap" checked> <span id="vwaplab">VWAP</span></label>
++</span><span class="muted" id="nb"></span></div>
+ <div class="muted" id="ohlc" style="margin-bottom:4px"></div><div id="c_main" style="height:380px"></div>
+-<div class="muted" style="margin:6px 0"><span style="color:#f5a623">● SMA 20</span> &nbsp;<span style="color:#5aa9ff">● SMA 50</span> &nbsp;<span style="color:#e15bff">● SMA 200</span> &nbsp;<span style="color:#ffd84d">● Session VWAP</span> &nbsp;<span style="color:#7ee2a8">▲ buy</span> <span style="color:#ff7b7b">▼ sell</span> fills · dashed = open stop/target · blue = avg entry</div>
+-<div style="display:flex;gap:12px;align-items:center;margin:8px 0"><span class="muted">Zoom</span><input type="range" id="zoom" min="10" max="100" value="100" style="flex:1"><span class="muted">Earlier</span><input type="range" id="pan" min="0" max="100" value="0" style="flex:1"><button class="btn" onclick="pan.value=0;applyRange()">Latest</button></div>
++<div class="muted" style="margin:6px 0"><span style="color:#f5a623">● SMA 20</span> &nbsp;<span style="color:#5aa9ff">● SMA 50</span> &nbsp;<span style="color:#e15bff">● SMA 200</span> &nbsp;<span style="color:#2ec4b6">● EMA 20</span> &nbsp;<span style="color:#9aa0a6">● Bollinger</span> &nbsp;<span style="color:#ffd84d">● VWAP</span><br><span style="color:#7ee2a8">▲ buy</span> <span style="color:#ff7b7b">▼ sell</span> fills · dashed = open stop/target · blue = avg entry · white = drawings</div>
++<div style="display:flex;gap:12px;align-items:center;margin:8px 0;flex-wrap:wrap"><span class="muted">Zoom</span><input type="range" id="zoom" min="10" max="100" value="100" style="flex:1;min-width:80px"><span class="muted">Earlier</span><input type="range" id="pan" min="0" max="100" value="0" style="flex:1;min-width:80px"><button class="btn" type="button" id="latest">Latest</button>
++<span class="muted">Draw</span><div class="seg" id="tools"><button type="button" data-tool="pan" class="on">Pan</button><button type="button" data-tool="trend">Trend</button><button type="button" data-tool="level">Level</button><button type="button" data-tool="delete">Delete</button></div></div>
++<div class="muted" id="toolhint">Scroll and zoom the chart. Drawings are saved for this symbol on this computer.</div>
+ <div class="muted">VOLUME</div><div id="c_vol" style="height:90px"></div><div class="muted" id="rsil">RSI (14)</div><div id="c_rsi" style="height:100px"></div>
+ <div class="muted" id="macdl">MACD (12,26,9) · blue MACD / orange signal</div><div id="c_macd" style="height:110px"></div></div>
+-<div><div class="card brief"><div style="color:#7ee2a8;font-weight:800">⚡ Technical brief</div><div class="muted" style="margin-top:8px">LOCAL RULE-BASED ANALYSIS · NOT GENERATIVE AI</div>
++<div><div class="card brief"><div style="color:#7ee2a8;font-weight:800">Technical brief</div><div class="muted" style="margin-top:8px">LOCAL RULE-BASED ANALYSIS · NOT GENERATIVE AI</div>
+ <div id="brief"></div><hr style="border-color:#3a3a40"><div class="muted">Indicators describe the loaded bars; they do not predict returns. Periods refer to the selected interval.<br><br>IEX covers one exchange. Volume and VWAP do not represent the consolidated market.<br><br>Day P&amp;L = equity − prior closing equity.</div></div>
+ <div class="card" style="margin-top:16px"><div style="font-weight:800;margin-bottom:8px">Open positions</div><div id="pos" class="muted">Loading…</div></div>
+-<div class="muted" style="margin-top:10px">Charts by <a href="https://www.tradingview.com/" target="_blank">TradingView</a> Lightweight Charts™ (Apache-2.0, static/lightweight-charts.LICENSE.txt)</div></div></div>"""
++<div class="card" id="bt" style="margin-top:16px"><div style="font-weight:800">Backtest</div>
++<div class="muted" style="margin:6px 0">Same Alpaca bars as the chart, up to 5000. Fees, slippage, and the equity curve are a simulation. No order is sent.</div>
++<div class="seg" id="strat" style="margin-bottom:8px"><button type="button" data-s="sma" class="on">SMA cross</button><button type="button" data-s="rsi">RSI</button></div>
++<div id="sma_opts" class="muted">Fast <input id="bt_fast" value="10"> Slow <input id="bt_slow" value="30"></div>
++<div id="rsi_opts" class="muted" style="display:none">Period <input id="bt_period" value="14"> Below <input id="bt_os" value="30"> Above <input id="bt_ob" value="70"></div>
++<div class="muted" style="margin-top:6px">Fee bps <input id="bt_fee" value="0"> Slip bps <input id="bt_slip" value="0"></div>
++<div class="muted" style="margin-top:6px">Capital <input id="bt_cap" value="10000" style="width:90px"></div>
++<button class="btn" type="button" id="bt_run" style="margin-top:8px">Run backtest</button>
++<div id="bt_out" style="margin-top:8px"></div><div id="c_eq" style="height:120px;margin-top:8px"></div></div>
++<div class="muted" style="margin-top:10px">Charts by <a href="https://www.tradingview.com/" target="_blank">TradingView</a> Lightweight Charts (Apache-2.0, static/lightweight-charts.LICENSE.txt)</div></div></div>"""
+ 
+ SCRIPT = r"""
+-let TF=new URLSearchParams(location.search).get('tf')||'1D';CUR=new URLSearchParams(location.search).get('symbol')||null;let B=[],POS=[],plines=[];
++let TF=new URLSearchParams(location.search).get('tf')||'1D';CUR=new URLSearchParams(location.search).get('symbol')||null;
++let B=[],S={},POS=[],plines=[],DRAWS=[],TOOL='pan',pending=null,drawSym=null,drawSeries=[],drawLines=[];
+ const base={layout:{background:{color:'#26262a'},textColor:'#b9b9c0'},grid:{vertLines:{color:'#303035'},horzLines:{color:'#303035'}},rightPriceScale:{borderColor:'#3a3a40',minimumWidth:70},timeScale:{borderColor:'#3a3a40',timeVisible:true},crosshair:{mode:0}};
+ const mk=(id,o={})=>LightweightCharts.createChart(document.getElementById(id),Object.assign({autoSize:true},base,o));
+-const cm=mk('c_main'),cv=mk('c_vol',{timeScale:{visible:false}}),cr=mk('c_rsi',{timeScale:{visible:false}}),cx=mk('c_macd');
++const cm=mk('c_main'),cv=mk('c_vol',{timeScale:{visible:false}}),cr=mk('c_rsi',{timeScale:{visible:false}}),cx=mk('c_macd'),ce=mk('c_eq');
+ const cs=cm.addCandlestickSeries({upColor:'#7ee2a8',downColor:'#ff6b6b',borderVisible:false,wickUpColor:'#7ee2a8',wickDownColor:'#ff6b6b'});
+ const L=(c,col,w=2)=>c.addLineSeries({color:col,lineWidth:w,priceLineVisible:false,lastValueVisible:false});
+-const m20=L(cm,'#f5a623'),m50=L(cm,'#5aa9ff'),m200=L(cm,'#e15bff'),vw=L(cm,'#ffd84d',1);
++const m20=L(cm,'#f5a623'),m50=L(cm,'#5aa9ff'),m200=L(cm,'#e15bff'),ema20=L(cm,'#2ec4b6'),vw=L(cm,'#ffd84d',1);
++const bbU=L(cm,'#9aa0a6',1),bbL=L(cm,'#9aa0a6',1),bbM=L(cm,'#9aa0a6',1);bbM.applyOptions({lineStyle:2});
+ const vs=cv.addHistogramSeries({priceFormat:{type:'volume'},priceLineVisible:false});const rs=L(cr,'#e15bff');
+ [70,50,30].forEach(v=>rs.createPriceLine({price:v,color:'#55555c',lineStyle:2,lineWidth:1,axisLabelVisible:false}));
+ const mh=cx.addHistogramSeries({priceLineVisible:false}),ml=L(cx,'#5aa9ff'),msg=L(cx,'#f5a623');
++const eq=ce.addLineSeries({color:'#7ee2a8',lineWidth:2,priceLineVisible:false,lastValueVisible:true});
+ const charts=[cm,cv,cr,cx];let syncing=false;charts.forEach(c=>c.timeScale().subscribeVisibleLogicalRangeChange(r=>{if(syncing||!r)return;syncing=true;charts.forEach(o=>o!==c&&o.timeScale().setVisibleLogicalRange(r));syncing=false}));
+-function sma(v,n){const o=[];let s=0;for(let i=0;i<v.length;i++){s+=v[i];if(i>=n)s-=v[i-n];o.push(i>=n-1?s/n:null)}return o}
+-function ema(v,n){const k=2/(n+1),o=[];let e=null;v.forEach((x,i)=>{e=i==0?x:x*k+e*(1-k);o.push(e)});return o}
+-function rsiCalc(c,n=14){const o=Array(c.length).fill(null);let g=0,l=0;for(let i=1;i<c.length;i++){const d=c[i]-c[i-1];if(i<=n){g+=Math.max(d,0);l+=Math.max(-d,0);if(i==n){g/=n;l/=n;o[i]=100-100/(1+g/(l||1e-9))}}else{g=(g*(n-1)+Math.max(d,0))/n;l=(l*(n-1)+Math.max(-d,0))/n;o[i]=100-100/(1+g/(l||1e-9))}}return o}
+-const ser=(v)=>v.map((x,i)=>x==null?{time:B[i].time}:{time:B[i].time,value:x});const f2=x=>x==null?'—':Number(x).toFixed(2);
+-function sessionKey(t){return new Date(t*1000).toLocaleDateString('en-US',{timeZone:'America/New_York'})}
++const f2=x=>x==null?'—':Number(x).toFixed(2);
++const ser=v=>!v?[]:v.flatMap((x,i)=>x==null?[]:[{time:B[i].time,value:x}]);
++function lastOf(v){if(!v)return null;for(let i=v.length-1;i>=0;i--)if(v[i]!=null)return v[i];return null}
++function paintStudies(){
++ if(!B.length)return;const on=id=>document.getElementById(id).checked;
++ m20.setData(on('sma')?ser(S.sma20):[]);m50.setData(on('sma')?ser(S.sma50):[]);m200.setData(on('sma')?ser(S.sma200):[]);
++ ema20.setData(on('ema')?ser(S.ema20):[]);bbU.setData(on('bb')?ser(S.bb_upper):[]);bbL.setData(on('bb')?ser(S.bb_lower):[]);bbM.setData(on('bb')?ser(S.bb_middle):[]);
++ vw.setData(on('vwap')?ser(S.vwap):[]);rs.setData(ser(S.rsi));ml.setData(ser(S.macd));msg.setData(ser(S.macd_signal));
++ const h=S.macd_histogram||[];mh.setData(h.flatMap((x,i)=>x==null?[]:[{time:B[i].time,value:x,color:x>=0?'#7ee2a8aa':'#ff6b6baa'}]));
++ document.getElementById('rsil').textContent='RSI (14) · '+f2(lastOf(S.rsi));
++ document.getElementById('vwaplab').textContent=S.vwap_label||'VWAP';
++}
++function clearSeries(){[cs,vs,m20,m50,m200,ema20,bbU,bbL,bbM,vw,rs,mh,ml,msg].forEach(x=>x.setData([]));plines.forEach(p=>cs.removePriceLine(p));plines=[]}
+ document.querySelectorAll('#tfs button').forEach(b=>b.onclick=()=>{TF=b.dataset.tf;load(true)});
++['sma','ema','bb','vwap'].forEach(id=>document.getElementById(id).onchange=paintStudies);
+ document.getElementById('q').addEventListener('keydown',e=>{if(e.key=='Enter'&&e.target.value.trim()){selectSym(e.target.value.trim().toUpperCase());e.target.value=''}});
+-document.getElementById('ma').onchange=()=>load(false);const zoom=document.getElementById('zoom'),pan=document.getElementById('pan');zoom.oninput=pan.oninput=applyRange;
++const zoom=document.getElementById('zoom'),pan=document.getElementById('pan');zoom.oninput=pan.oninput=applyRange;
++document.getElementById('latest').onclick=()=>{pan.value=0;applyRange()};
+ function applyRange(){if(!B.length)return;const n=B.length,w=Math.max(10,Math.round(n*zoom.value/100)),off=Math.round((n-w)*pan.value/100);cm.timeScale().setVisibleLogicalRange({from:n-w-off-0.5,to:n-1-off+2})}
+ function selectSym(s){CUR=s;wlRender();load(true)}window.onWatchlist=()=>{};
+-async function load(fit){if(!CUR)return;document.querySelectorAll('#tfs button').forEach(b=>b.classList.toggle('on',b.dataset.tf==TF));history.replaceState(null,'',`/chart?symbol=${encodeURIComponent(CUR)}&tf=${TF}`);
+- document.getElementById('sym').textContent=CUR;const r=await (await fetch(`/api/chart/bars?symbol=${encodeURIComponent(CUR)}&tf=${TF}`)).json();
+- if(!r.ok||!r.bars.length){document.getElementById('nb').textContent=r.error||'No bars';[cs,vs,m20,m50,m200,vw,rs,mh,ml,msg].forEach(x=>x.setData([]));document.getElementById('brief').innerHTML='<p>No data.</p>';return}
+- B=r.bars;const c=B.map(b=>b.close);document.getElementById('nb').textContent=B.length+' bars · '+r.feed;cs.setData(B);
+- vs.setData(B.map(b=>({time:b.time,value:b.volume,color:b.close>=b.open?'#7ee2a8aa':'#ff6b6baa'})));
+- const on=document.getElementById('ma').checked,s20=sma(c,20),s50=sma(c,50),s200=sma(c,200);m20.setData(on?ser(s20):[]);m50.setData(on?ser(s50):[]);m200.setData(on?ser(s200):[]);
+- let k=null,pv=0,vv=0;const vwap=B.map(b=>{const kk=TF=='1D'?b.time:sessionKey(b.time);if(kk!==k){k=kk;pv=0;vv=0}const tp=(b.high+b.low+b.close)/3;pv+=tp*b.volume;vv+=b.volume;return vv?pv/vv:tp});vw.setData(on&&TF!='1D'?ser(vwap):[]);
+- const rsi=rsiCalc(c);rs.setData(ser(rsi));const e12=ema(c,12),e26=ema(c,26),mac=c.map((_,i)=>e12[i]-e26[i]),sig=ema(mac,9),hist=mac.map((x,i)=>x-sig[i]);
+- ml.setData(ser(mac));msg.setData(ser(sig));mh.setData(B.map((b,i)=>({time:b.time,value:hist[i],color:hist[i]>=0?'#7ee2a8aa':'#ff6b6baa'})));
+- const Lb=B[B.length-1],ch=B.length>1?(Lb.close/B[B.length-2].close-1)*100:0;const px=document.getElementById('px');px.textContent=f2(Lb.close);px.className=Lb.close>=B[Math.max(0,B.length-2)].close?'up':'dn';
+- document.getElementById('ohlc').textContent=`${TF=='1D'?new Date(Lb.time*1000).toLocaleDateString('en-US',{timeZone:'UTC'}):new Date(Lb.time*1000).toLocaleString('en-US',{timeZone:'America/Chicago'})+' CT'}  O ${f2(Lb.open)}  H ${f2(Lb.high)}  L ${f2(Lb.low)}  C ${f2(Lb.close)}  V ${Lb.volume.toLocaleString()}`;
+- const R=rsi[rsi.length-1];document.getElementById('rsil').textContent='RSI (14) · '+f2(R);
+- const p50=s50[s50.length-1],p200=s200[s200.length-1],h=hist[hist.length-1];let tr=p50==null?'Not enough bars for a 50-bar average.':`Price is ${Lb.close>=p50?'above':'below'} the 50-bar moving average (${f2(p50)}).`;
+- if(p200!=null)tr+=` The 50-bar average is ${p50>=p200?'above':'below'} the 200-bar average (${f2(p200)}).`;
++function setTool(t){
++ TOOL=t;pending=null;document.querySelectorAll('#tools button').forEach(b=>b.classList.toggle('on',b.dataset.tool===t));
++ const allow=t==='pan';cm.applyOptions({handleScroll:allow,handleScale:allow});
++ const hints={pan:'Scroll and zoom the chart.',trend:'Click the start, then the end.',level:'Click to place a horizontal level.',delete:'Click a line to remove it.'};
++ document.getElementById('toolhint').textContent=hints[t]+' Saved for this symbol on this computer.';
++}
++document.querySelectorAll('#tools button').forEach(b=>b.onclick=()=>setTool(b.dataset.tool));
++function asTime(t){if(typeof t==='number'&&isFinite(t))return Math.round(t);if(t&&typeof t==='object'&&t.year)return Math.floor(Date.UTC(t.year,t.month-1,t.day)/1000);return null}
++function distToSeg(p,a,b){const abx=b.x-a.x,aby=b.y-a.y,den=abx*abx+aby*aby;const u=den?Math.max(0,Math.min(1,((p.x-a.x)*abx+(p.y-a.y)*aby)/den)):0;return Math.hypot(p.x-(a.x+abx*u),p.y-(a.y+aby*u))}
++function nearestDraw(point){
++ let best=-1,bd=14;DRAWS.forEach((d,i)=>{let dist=1e9;if(d.kind==='hline'){const y=cs.priceToCoordinate(d.price);if(y!=null)dist=Math.abs(point.y-y)}else{const a={x:cm.timeScale().timeToCoordinate(d.a.time),y:cs.priceToCoordinate(d.a.price)},b={x:cm.timeScale().timeToCoordinate(d.b.time),y:cs.priceToCoordinate(d.b.price)};if(a.x==null||b.x==null||a.y==null||b.y==null)return;dist=distToSeg(point,a,b)}if(dist<bd){bd=dist;best=i}});return best}
++function paintDraws(){
++ drawSeries.forEach(s=>{try{cm.removeSeries(s)}catch(e){}});drawSeries=[];
++ drawLines.forEach(p=>{try{cs.removePriceLine(p)}catch(e){}});drawLines=[];
++ DRAWS.forEach(d=>{
++  if(d.kind==='hline')drawLines.push(cs.createPriceLine({price:d.price,color:'#e7e7ea',lineWidth:1,lineStyle:2,title:'LEVEL'}));
++  else if(d.kind==='trend'){const a=d.a.time<=d.b.time?d.a:d.b,b=d.a.time<=d.b.time?d.b:d.a;const s=cm.addLineSeries({color:'#e7e7ea',lineWidth:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});s.setData([{time:a.time,value:a.price},{time:b.time,value:b.price}]);drawSeries.push(s)}
++ });
++}
++async function loadDraws(){
++ if(!CUR)return;if(drawSym!==CUR){pending=null;drawSym=CUR}
++ try{const r=await (await fetch('/api/chart/drawings?symbol='+encodeURIComponent(CUR))).json();DRAWS=(r.ok&&Array.isArray(r.drawings))?r.drawings:[]}catch(e){DRAWS=[]}
++ paintDraws();
++}
++async function saveDraws(){
++ if(!CUR)return;
++ try{const r=await (await fetch('/api/chart/drawings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:CUR,drawings:DRAWS})})).json();if(!r.ok)document.getElementById('toolhint').textContent=r.error||'Could not save drawings'}
++ catch(e){document.getElementById('toolhint').textContent='Could not save drawings'}
++}
++cm.subscribeClick(param=>{
++ if(TOOL==='pan'||!param||!param.point||!B.length)return;
++ const price=cs.coordinateToPrice(param.point.y);if(price==null||!isFinite(price))return;
++ if(TOOL==='delete'){const i=nearestDraw(param.point);if(i<0)return;DRAWS.splice(i,1);paintDraws();saveDraws();return}
++ if(TOOL==='level'){DRAWS.push({kind:'hline',price:price});if(DRAWS.length>200)DRAWS=DRAWS.slice(-200);paintDraws();saveDraws();return}
++ if(TOOL!=='trend')return;
++ const time=asTime(param.time!=null?param.time:cm.timeScale().coordinateToTime(param.point.x));if(time==null)return;
++ if(!pending){pending={time:time,price:price};document.getElementById('toolhint').textContent='Click the end of the trend line.';return}
++ if(pending.time===time)return;
++ DRAWS.push({kind:'trend',a:pending,b:{time:time,price:price}});pending=null;if(DRAWS.length>200)DRAWS=DRAWS.slice(-200);paintDraws();saveDraws();
++});
++function brief(){
++ const Lb=B[B.length-1],prev=B[Math.max(0,B.length-2)],ch=B.length>1?(Lb.close/prev.close-1)*100:0;
++ const px=document.getElementById('px');px.textContent=f2(Lb.close);px.className=Lb.close>=prev.close?'up':'dn';
++ document.getElementById('ohlc').textContent=`${TF=='1D'||TF=='1W'?new Date(Lb.time*1000).toLocaleDateString('en-US',{timeZone:'UTC'}):new Date(Lb.time*1000).toLocaleString('en-US',{timeZone:'America/Chicago'})+' CT'}  O ${f2(Lb.open)}  H ${f2(Lb.high)}  L ${f2(Lb.low)}  C ${f2(Lb.close)}  V ${Number(Lb.volume||0).toLocaleString()}`;
++ const s50=lastOf(S.sma50),s200=lastOf(S.sma200),R=lastOf(S.rsi),mac=lastOf(S.macd),sig=lastOf(S.macd_signal);
++ const hist=(S.macd_histogram||[]).filter(x=>x!=null),h=hist.length?hist[hist.length-1]:null,hp=hist.length>1?hist[hist.length-2]:null;
++ let tr=s50==null?'Not enough bars for a 50-bar average.':`Price is ${Lb.close>=s50?'above':'below'} the 50-bar moving average (${f2(s50)}).`;
++ if(s200!=null)tr+=` The 50-bar average is ${s50>=s200?'above':'below'} the 200-bar average (${f2(s200)}).`;
++ const e20=lastOf(S.ema20);if(e20!=null)tr+=` EMA 20 is ${f2(e20)}.`;
+  const mo=R==null?'Not enough bars.':`RSI(14) is ${f2(R)}. `+(R>70?'Above the conventional 70 (overbought) threshold.':R<30?'Below the conventional 30 (oversold) threshold.':'Between the conventional 30 and 70 thresholds.');
+- const md=`MACD is ${mac[mac.length-1]>=sig[sig.length-1]?'above':'below'} its signal line. Histogram: ${f2(h)}.`+(hist.length>1&&Math.sign(h)!=Math.sign(hist[hist.length-2])?' It just crossed on the latest bar.':'');
+- document.getElementById('brief').innerHTML=`<h4>Trend</h4><p>${tr}</p><h4>Momentum</h4><p>${mo}</p><h4>MACD</h4><p>${md}</p><h4>Last bar</h4><p>${ch>=0?'+':''}${f2(ch)}% vs prior bar.</p>`;
+- const o=await (await fetch(`/api/chart/orders?symbol=${encodeURIComponent(CUR)}`)).json();plines.forEach(p=>cs.removePriceLine(p));plines=[];
+- if(o.ok){const snap=t=>{if(t<B[0].time)return null;let lo=0,hi=B.length-1;while(lo<hi){const m=(lo+hi+1)>>1;B[m].time<=t?lo=m:hi=m-1}return B[lo].time};
+-  cs.setMarkers(o.fills.map(x=>({t:snap(x.time),x})).filter(z=>z.t).map(({t,x})=>({time:t,position:x.side=='buy'?'belowBar':'aboveBar',color:x.side=='buy'?'#7ee2a8':'#ff6b6b',shape:x.side=='buy'?'arrowUp':'arrowDown',text:`${x.side=='buy'?'B':'S'} ${+x.qty.toFixed(4)} @ ${f2(x.price)}`})).sort((a,b)=>a.time-b.time));
+-  o.lines.forEach(l=>plines.push(cs.createPriceLine({price:l.price,color:l.kind=='stop'?'#ff6b6b':'#7ee2a8',lineWidth:1,lineStyle:2,title:l.kind.toUpperCase()})))}
+- const p=POS.find(p=>p.symbol.replace('/','')==CUR.replace('/',''));if(p)plines.push(cs.createPriceLine({price:p.avg_entry,color:'#5aa9ff',lineWidth:1,title:'AVG'}));
+- if(fit){zoom.value=TF=='1D'?40:100;pan.value=0;applyRange()}}
++ const md=mac==null||sig==null?'Not enough bars for MACD.':`MACD is ${mac>=sig?'above':'below'} its signal line. Histogram: ${f2(h)}.`+(hp!=null&&Math.sign(h)!=Math.sign(hp)?' It just crossed on the latest bar.':'');
++ const bb=lastOf(S.bb_middle),vwap=lastOf(S.vwap);
++ document.getElementById('brief').innerHTML=`<h4>Trend</h4><p>${tr}</p><h4>Momentum</h4><p>${mo}</p><h4>MACD</h4><p>${md}</p><h4>Bands and VWAP</h4><p>Bollinger midline ${f2(bb)}. ${esc(S.vwap_label||'VWAP')} ${f2(vwap)}.</p><h4>Last bar</h4><p>${ch>=0?'+':''}${f2(ch)}% vs prior bar.</p>`;
++}
++async function load(fit){
++ if(!CUR)return;document.querySelectorAll('#tfs button').forEach(b=>b.classList.toggle('on',b.dataset.tf==TF));
++ history.replaceState(null,'',`/chart?symbol=${encodeURIComponent(CUR)}&tf=${TF}`);document.getElementById('sym').textContent=CUR;
++ const r=await (await fetch(`/api/chart/bars?symbol=${encodeURIComponent(CUR)}&tf=${TF}`)).json();
++ if(!r.ok||!r.bars.length){document.getElementById('nb').textContent=r.error||'No bars';B=[];S={};clearSeries();document.getElementById('brief').innerHTML='<p>No data.</p>';await loadDraws();return}
++ B=r.bars;S=r.studies||{};document.getElementById('nb').textContent=B.length+' bars · '+r.feed;cs.setData(B);
++ vs.setData(B.map(b=>({time:b.time,value:b.volume,color:b.close>=b.open?'#7ee2a8aa':'#ff6b6baa'})));paintStudies();brief();
++ try{const o=await (await fetch(`/api/chart/orders?symbol=${encodeURIComponent(CUR)}`)).json();plines.forEach(p=>cs.removePriceLine(p));plines=[];
++  if(o.ok){const snap=t=>{if(t<B[0].time)return null;let lo=0,hi=B.length-1;while(lo<hi){const m=(lo+hi+1)>>1;B[m].time<=t?lo=m:hi=m-1}return B[lo].time};
++   cs.setMarkers(o.fills.map(x=>({t:snap(x.time),x})).filter(z=>z.t).map(({t,x})=>({time:t,position:x.side=='buy'?'belowBar':'aboveBar',color:x.side=='buy'?'#7ee2a8':'#ff6b6b',shape:x.side=='buy'?'arrowUp':'arrowDown',text:`${x.side=='buy'?'B':'S'} ${+x.qty.toFixed(4)} @ ${f2(x.price)}`})).sort((a,b)=>a.time-b.time));
++   o.lines.forEach(l=>plines.push(cs.createPriceLine({price:l.price,color:l.kind=='stop'?'#ff6b6b':'#7ee2a8',lineWidth:1,lineStyle:2,title:l.kind.toUpperCase()})))}
++  const p=POS.find(p=>p.symbol.replace('/','')==CUR.replace('/',''));if(p)plines.push(cs.createPriceLine({price:p.avg_entry,color:'#5aa9ff',lineWidth:1,title:'AVG'}));
++ }catch(e){}
++ await loadDraws();if(fit){zoom.value=(TF=='1D'||TF=='1W')?40:100;pan.value=0;applyRange()}
++}
++let STRAT='sma';
++document.querySelectorAll('#strat button').forEach(b=>b.onclick=()=>{STRAT=b.dataset.s;document.querySelectorAll('#strat button').forEach(x=>x.classList.toggle('on',x===b));document.getElementById('sma_opts').style.display=STRAT==='sma'?'':'none';document.getElementById('rsi_opts').style.display=STRAT==='rsi'?'':'none'});
++document.getElementById('bt_run').onclick=runBt;
++async function runBt(){
++ if(!CUR){document.getElementById('bt_out').textContent='Choose a symbol first.';return}
++ document.getElementById('bt_out').textContent='Running…';
++ const num=id=>Number(document.getElementById(id).value);
++ const body={symbol:CUR,tf:TF,strategy:STRAT,fast:num('bt_fast'),slow:num('bt_slow'),period:num('bt_period'),oversold:num('bt_os'),overbought:num('bt_ob'),fee_bps:num('bt_fee'),slippage_bps:num('bt_slip'),initial_capital:num('bt_cap')};
++ let r;try{r=await (await fetch('/api/chart/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json()}catch(e){document.getElementById('bt_out').textContent='Backtest request failed.';return}
++ if(!r.ok){document.getElementById('bt_out').textContent=r.error||'Backtest failed.';eq.setData([]);return}
++ const pct=x=>x==null?'—':(x*100).toFixed(2)+'%';
++ document.getElementById('bt_out').innerHTML=`<div>Return <b class="${r.return>=0?'up':'dn'}">${pct(r.return)}</b></div><div>Max drawdown ${pct(r.max_drawdown)}</div><div>Win rate ${r.win_rate==null?'—':pct(r.win_rate)} · ${r.trade_count} closed trades${r.open_position?' · position still open':''}</div><div>Final equity ${money(r.final_equity)} · ${r.bar_count} bars</div><div class="muted" style="margin-top:6px">${esc(r.assumptions||'')}</div>`;
++ const pts=[];let lastT=-Infinity;for(const p of (r.equity||[])){if(!p||!isFinite(p.equity)||!isFinite(p.time)||p.time<=lastT)continue;lastT=p.time;pts.push({time:p.time,value:p.equity})}
++ eq.setData(pts);if(pts.length)ce.timeScale().fitContent();
++}
+ async function positions(){const r=await (await fetch('/api/chart/positions')).json();if(!r.ok)return;POS=r.positions;
+  document.getElementById('pos').innerHTML=POS.map(p=>`<div class="wl" onclick="selectSym('${esc(p.symbol)}')"><span>${esc(p.symbol)}</span><span class="${p.upl>=0?'up':'dn'}">${money(p.upl,1)} (${p.uplpc.toFixed(2)}%)</span></div>`).join('')||'No open positions.';
+  if(!CUR)CUR=WL[0]||(POS[0]||{}).symbol||'SPY';wlRender()}
++setTool('pan');
+ window.pageInit=async()=>{await positions();load(true)};window.pageRefresh=async()=>{await positions();load(false)};
+ """
+ 
++
+ @bp.get("/chart")
+ def page():
+     from ui import shell
+-    return shell("chart", "Your market workspace", BODY, SCRIPT, '<script src="/static/lightweight-charts.standalone.production.js"></script>')
++    return shell("chart", "Charts", BODY, SCRIPT, '<script src="/static/lightweight-charts.standalone.production.js"></script>')
+diff -ruN tt-old/studies.py tt-new/studies.py
+--- tt-old/studies.py	1970-01-01 00:00:00.000000000 +0000
++++ tt-new/studies.py	2026-10-20 23:20:40.970789871 +0000
+@@ -0,0 +1,395 @@
++"""Indicator and backtest math for the AlpacaDesk chart page.
++
++Pure functions: no Flask, no broker client, and no order placement.
++SMA is an arithmetic mean. EMA is seeded with that SMA, then uses
++2 / (period + 1). RSI uses Wilder smoothing and is 100 when average
++loss is 0. MACD is EMA(fast) - EMA(slow); the signal is an EMA of that
++line. Bollinger Bands use the population standard deviation (divide by N).
++Intraday VWAP resets on the America/New_York date. Daily and weekly VWAP
++accumulates across the loaded bars.
++
++The simulator is long or flat. A signal uses only data through that bar's
++close and fills at the next bar's open.
++"""
++import datetime as dt
++import math
++from zoneinfo import ZoneInfo
++
++NY = ZoneInfo("America/New_York")
++ASSUMPTIONS = (
++    "Long or flat. A signal uses only bars through that close and fills at the next bar's open. "
++    "Buy slippage raises the fill and sell slippage lowers it. "
++    "Fees are charged on the cash used to enter and on the proceeds of the exit. "
++    "An open position is marked in the equity curve and the total return, and it is excluded from the win rate and the trade count. "
++    "This simulation does not place orders."
++)
++
++
++def _finite(value):
++    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
++
++
++def _period(value, label):
++    if isinstance(value, bool):
++        raise ValueError("%s period must be an integer >= 1" % label)
++    if isinstance(value, float):
++        if not value.is_integer():
++            raise ValueError("%s period must be an integer >= 1" % label)
++        value = int(value)
++    if not isinstance(value, int) or value < 1:
++        raise ValueError("%s period must be an integer >= 1" % label)
++    return value
++
++
++def _bps(value, label):
++    if not _finite(value) or value < 0 or value > 10000:
++        raise ValueError("%s must be a finite number of basis points from 0 through 10000" % label)
++    return float(value)
++
++
++def _capital(value):
++    if not _finite(value) or value <= 0:
++        raise ValueError("Initial capital must be a finite number > 0")
++    return float(value)
++
++
++def sma(values, period):
++    period = _period(period, "SMA")
++    out = [None] * len(values)
++    for end in range(period - 1, len(values)):
++        window = values[end - period + 1:end + 1]
++        if any(not _finite(item) for item in window):
++            continue
++        out[end] = sum(window) / period
++    return out
++
++
++def ema(values, period):
++    period = _period(period, "EMA")
++    out = [None] * len(values)
++    multiplier = 2.0 / (period + 1)
++    seed_sum = 0.0
++    seed_count = 0
++    previous = None
++    for index, value in enumerate(values):
++        if not _finite(value):
++            seed_sum = 0.0
++            seed_count = 0
++            previous = None
++            continue
++        if previous is None:
++            seed_sum += value
++            seed_count += 1
++            if seed_count == period:
++                previous = seed_sum / period
++                out[index] = previous
++            continue
++        previous = (value - previous) * multiplier + previous
++        out[index] = previous
++    return out
++
++
++def _rsi_from_averages(average_gain, average_loss):
++    if average_loss == 0:
++        return 100.0
++    return 100.0 - 100.0 / (1.0 + average_gain / average_loss)
++
++
++def rsi(values, period):
++    period = _period(period, "RSI")
++    out = [None] * len(values)
++    average_gain = None
++    average_loss = None
++    seed_gain = 0.0
++    seed_loss = 0.0
++    seed_count = 0
++    previous_close = None
++    for index, value in enumerate(values):
++        if not _finite(value):
++            average_gain = None
++            average_loss = None
++            seed_gain = 0.0
++            seed_loss = 0.0
++            seed_count = 0
++            previous_close = None
++            continue
++        if previous_close is None:
++            previous_close = value
++            continue
++        change = value - previous_close
++        previous_close = value
++        gain = change if change > 0 else 0.0
++        loss = -change if change < 0 else 0.0
++        if average_gain is None:
++            seed_gain += gain
++            seed_loss += loss
++            seed_count += 1
++            if seed_count == period:
++                average_gain = seed_gain / period
++                average_loss = seed_loss / period
++                out[index] = _rsi_from_averages(average_gain, average_loss)
++            continue
++        average_gain = (average_gain * (period - 1) + gain) / period
++        average_loss = (average_loss * (period - 1) + loss) / period
++        out[index] = _rsi_from_averages(average_gain, average_loss)
++    return out
++
++
++def macd(values, fast=12, slow=26, signal=9):
++    fast = _period(fast, "MACD fast")
++    slow = _period(slow, "MACD slow")
++    signal = _period(signal, "MACD signal")
++    if fast >= slow:
++        raise ValueError("MACD fast period must be shorter than the slow period")
++    fast_ema = ema(values, fast)
++    slow_ema = ema(values, slow)
++    line = []
++    for index in range(len(values)):
++        if fast_ema[index] is None or slow_ema[index] is None:
++            line.append(None)
++        else:
++            line.append(fast_ema[index] - slow_ema[index])
++    signal_line = ema(line, signal)
++    histogram = []
++    for index, value in enumerate(line):
++        if value is None or signal_line[index] is None:
++            histogram.append(None)
++        else:
++            histogram.append(value - signal_line[index])
++    return {"macd": line, "signal": signal_line, "histogram": histogram}
++
++
++def bollinger(values, period=20, multiplier=2):
++    period = _period(period, "Bollinger")
++    if not _finite(multiplier) or multiplier < 0:
++        raise ValueError("Bollinger multiplier must be a finite number >= 0")
++    middle = sma(values, period)
++    upper = [None] * len(values)
++    lower = [None] * len(values)
++    for end in range(period - 1, len(values)):
++        if middle[end] is None:
++            continue
++        sum_squares = 0.0
++        for index in range(end - period + 1, end + 1):
++            delta = values[index] - middle[end]
++            sum_squares += delta * delta
++        deviation = math.sqrt(sum_squares / period)
++        upper[end] = middle[end] + multiplier * deviation
++        lower[end] = middle[end] - multiplier * deviation
++    return {"middle": middle, "upper": upper, "lower": lower}
++
++
++def _num(bar, key):
++    if not isinstance(bar, dict):
++        return None
++    value = bar.get(key)
++    if not _finite(value):
++        return None
++    return float(value)
++
++
++def vwap(bars, tf="5m"):
++    """Typical price is (high + low + close) / 3. Intraday sessions reset at the New York date."""
++    out = []
++    reset = tf not in ("1D", "1W")
++    day = None
++    priced_volume = 0.0
++    volume_sum = 0.0
++    for bar in bars:
++        if reset:
++            stamp = _num(bar, "time")
++            if stamp is None:
++                out.append(None)
++                continue
++            next_day = dt.datetime.fromtimestamp(stamp, tz=dt.timezone.utc).astimezone(NY).date()
++            if next_day != day:
++                day = next_day
++                priced_volume = 0.0
++                volume_sum = 0.0
++        typical = None
++        high, low, close = _num(bar, "high"), _num(bar, "low"), _num(bar, "close")
++        if high is not None and low is not None and close is not None:
++            typical = (high + low + close) / 3.0
++        volume = _num(bar, "volume")
++        if typical is not None and volume is not None and volume > 0:
++            priced_volume += typical * volume
++            volume_sum += volume
++        out.append(priced_volume / volume_sum if volume_sum > 0 else None)
++    return out
++
++
++def volumes(bars):
++    return [_num(bar, "volume") for bar in bars]
++
++
++def pack(bars, tf):
++    closes = [bar.get("close") if isinstance(bar, dict) else None for bar in bars]
++    bands = bollinger(closes, 20, 2)
++    macd_lines = macd(closes, 12, 26, 9)
++    return {
++        "sma20": sma(closes, 20),
++        "sma50": sma(closes, 50),
++        "sma200": sma(closes, 200),
++        "ema20": ema(closes, 20),
++        "bb_middle": bands["middle"],
++        "bb_upper": bands["upper"],
++        "bb_lower": bands["lower"],
++        "vwap": vwap(bars, tf),
++        "vwap_label": "Cumulative VWAP" if tf in ("1D", "1W") else "Session VWAP",
++        "rsi": rsi(closes, 14),
++        "macd": macd_lines["macd"],
++        "macd_signal": macd_lines["signal"],
++        "macd_histogram": macd_lines["histogram"],
++    }
++
++
++def max_drawdown(equity):
++    if not equity:
++        return None
++    peak = equity[0]
++    worst = 0.0
++    for value in equity:
++        if not _finite(value):
++            raise ValueError("Equity values must be finite numbers")
++        if value > peak:
++            peak = value
++        if peak > 0:
++            decline = (peak - value) / peak
++            if decline > worst:
++                worst = decline
++    return worst
++
++
++def signals_sma_cross(bars, fast=10, slow=30):
++    fast = _period(fast, "Fast SMA")
++    slow = _period(slow, "Slow SMA")
++    if fast >= slow:
++        raise ValueError("Fast moving-average period must be shorter than the slow period")
++    closes = [bar.get("close") if isinstance(bar, dict) else None for bar in bars]
++    fast_average = sma(closes, fast)
++    slow_average = sma(closes, slow)
++    signals = []
++    for index, value in enumerate(fast_average):
++        slow_value = slow_average[index]
++        signals.append(1 if value is not None and slow_value is not None and value > slow_value else 0)
++    return signals
++
++
++def signals_rsi(bars, period=14, oversold=30, overbought=70):
++    period = _period(period, "RSI")
++    if (not _finite(oversold) or not _finite(overbought) or oversold < 0 or overbought > 100
++            or oversold >= overbought):
++        raise ValueError("RSI thresholds must satisfy 0 <= oversold < overbought <= 100")
++    closes = [bar.get("close") if isinstance(bar, dict) else None for bar in bars]
++    values = rsi(closes, period)
++    position = 0
++    out = []
++    for value in values:
++        if value is not None and position == 0 and value < oversold:
++            position = 1
++        elif value is not None and position == 1 and value > overbought:
++            position = 0
++        out.append(position)
++    return out
++
++
++def _opt(options, key, default):
++    if not isinstance(options, dict) or key not in options or options[key] is None:
++        return default
++    return options[key]
++
++
++def simulate_fills(bars, target_position, fee_bps=0, slippage_bps=0, initial_capital=10000):
++    if not isinstance(bars, list):
++        raise TypeError("Bars must be a list")
++    if not isinstance(target_position, list):
++        raise TypeError("Target positions must be a list")
++    fee = _bps(fee_bps, "Fee") / 10000.0
++    slip = _bps(slippage_bps, "Slippage") / 10000.0
++    initial_capital = _capital(initial_capital)
++    cash = initial_capital
++    shares = 0.0
++    entry_cash = None
++    entry = None
++    pending = None
++    trades = []
++    equity = []
++    for index, bar in enumerate(bars):
++        if not isinstance(bar, dict):
++            raise TypeError("Each bar must be an object")
++        opened = _num(bar, "open")
++        close = _num(bar, "close")
++        if pending == "buy" and shares == 0 and opened is not None:
++            fill = opened * (1.0 + slip)
++            spend = cash - cash * fee
++            if fill > 0 and spend > 0 and cash > 0:
++                shares = spend / fill
++                entry_cash = cash
++                entry = {"time": bar.get("time"), "price": fill}
++                cash = 0.0
++        elif pending == "sell" and shares > 0 and entry is not None and entry_cash is not None and opened is not None:
++            fill = opened * (1.0 - slip)
++            if fill > 0:
++                gross = shares * fill
++                next_cash = gross - gross * fee
++                trades.append({
++                    "entry_time": entry["time"],
++                    "entry_price": entry["price"],
++                    "exit_time": bar.get("time"),
++                    "exit_price": fill,
++                    "pnl": next_cash - entry_cash,
++                    "return": None if entry_cash == 0 else (next_cash - entry_cash) / entry_cash,
++                })
++                cash = next_cash
++                shares = 0.0
++                entry = None
++                entry_cash = None
++        pending = None
++        mark = close if close is not None else opened
++        if mark is None:
++            raise ValueError("Each bar needs a finite open or close")
++        equity.append({"time": bar.get("time"), "equity": cash + shares * mark})
++        desired = 1 if index < len(target_position) and target_position[index] else 0
++        held = 1 if shares > 0 else 0
++        if desired == 1 and held == 0:
++            pending = "buy"
++        elif desired == 0 and held == 1:
++            pending = "sell"
++    final_equity = equity[-1]["equity"] if equity else initial_capital
++    wins = len([trade for trade in trades if trade["pnl"] > 0])
++    curve = [point["equity"] for point in equity]
++    return {
++        "initial_capital": initial_capital,
++        "final_equity": final_equity,
++        "return": (final_equity - initial_capital) / initial_capital,
++        "max_drawdown": max_drawdown(curve),
++        "win_rate": None if not trades else wins / len(trades),
++        "trade_count": len(trades),
++        "equity": equity,
++        "trades": trades,
++        "open_position": shares > 0,
++        "bar_count": len(bars),
++        "assumptions": ASSUMPTIONS,
++    }
++
++
++def run_backtest(bars, options=None):
++    if not isinstance(bars, list):
++        raise TypeError("Bars must be a list")
++    options = options or {}
++    strategy = _opt(options, "strategy", None)
++    fee_bps = _opt(options, "fee_bps", 0)
++    slippage_bps = _opt(options, "slippage_bps", 0)
++    initial_capital = _opt(options, "initial_capital", 10000)
++    if strategy == "sma":
++        target = signals_sma_cross(bars, _opt(options, "fast", 10), _opt(options, "slow", 30))
++    elif strategy == "rsi":
++        target = signals_rsi(
++            bars,
++            _opt(options, "period", 14),
++            _opt(options, "oversold", 30),
++            _opt(options, "overbought", 70),
++        )
++    else:
++        raise ValueError('Strategy must be "sma" or "rsi"')
++    return simulate_fills(bars, target, fee_bps, slippage_bps, initial_capital)
+diff -ruN tt-old/tests/test_chart_api.py tt-new/tests/test_chart_api.py
+--- tt-old/tests/test_chart_api.py	1970-01-01 00:00:00.000000000 +0000
++++ tt-new/tests/test_chart_api.py	2026-10-20 23:24:56.617764848 +0000
+@@ -0,0 +1,148 @@
++"""Route checks for the chart page. Skips unless Flask is installed.
++
++The backtest and drawing routes are given mocked bars. They must not call
++the Alpaca data host or any order method.
++"""
++import pathlib
++import tempfile
++import unittest
++from unittest.mock import patch
++
++class ChartSourceTests(unittest.TestCase):
++    def test_chart_page_does_not_place_orders_or_select_live_trading(self):
++        text = pathlib.Path(__file__).resolve().parents[1].joinpath("chart.py").read_text(encoding="utf-8")
++        for name in ("submit_order", "submit_notional_buy", "cancel_order", "close_position", "api.alpaca.markets"):
++            self.assertNotIn(name, text)
++        self.assertNotIn("gappers", text)
++        self.assertNotIn("executor", text)
++        self.assertIn("https://data.alpaca.markets", text)
++        self.assertIn("studies.pack", text)
++        self.assertIn("studies.run_backtest", text)
++
++
++try:
++    from flask import Flask
++    import chart
++except Exception:
++    chart = None
++    Flask = None
++
++
++@unittest.skipUnless(chart is not None, "flask is not installed")
++class ChartApiTests(unittest.TestCase):
++    def setUp(self):
++        app = Flask(__name__)
++        app.register_blueprint(chart.bp)
++        self.client = app.test_client()
++        self.tmp = tempfile.TemporaryDirectory()
++        self.drawings = pathlib.Path(self.tmp.name) / "chart_drawings.json"
++        self.draw_patch = patch.object(chart, "DRAWINGS", self.drawings)
++        self.draw_patch.start()
++
++    def tearDown(self):
++        self.draw_patch.stop()
++        self.tmp.cleanup()
++
++    def _forbid_broker_io(self):
++        def boom(*_args, **_kwargs):
++            raise AssertionError("chart route tried to use the network or place an order")
++
++        return (
++            patch.object(chart.requests, "get", boom),
++            patch.object(chart.requests, "post", boom),
++            patch.object(chart.requests, "delete", boom),
++            patch.object(chart.Alpaca, "submit_order", boom),
++            patch.object(chart.Alpaca, "submit_notional_buy", boom),
++            patch.object(chart.Alpaca, "cancel_order", boom),
++            patch.object(chart.Alpaca, "close_position", boom),
++        )
++
++    def test_chart_page_renders_the_new_controls(self):
++        response = self.client.get("/chart")
++        self.assertEqual(response.status_code, 200)
++        html = response.get_data(as_text=True)
++        for text in ("15 min", "1 week", "EMA 20", "Bollinger", "Run backtest", 'data-tool="trend"', "No order is sent", ">Charts<"):
++            self.assertIn(text, html)
++        self.assertNotIn("submit_order", html)
++        self.assertNotIn("api.alpaca.markets", html)
++        self.assertIn("/static/lightweight-charts.standalone.production.js", html)
++
++    def test_backtest_uses_mocked_bars_and_does_not_place_orders(self):
++        bars = [{"time": index, "open": 10.0, "high": 11.0, "low": 9.0, "close": 10.0 + index, "volume": 1}
++                for index in range(6)]
++        guards = self._forbid_broker_io()
++        for guard in guards:
++            guard.start()
++        try:
++            with patch.object(chart, "_load_bars", return_value=(bars, "iex")) as load:
++                response = self.client.post("/api/chart/backtest", json={
++                    "symbol": "SPY",
++                    "tf": "1D",
++                    "strategy": "sma",
++                    "fast": 2,
++                    "slow": 3,
++                    "fee_bps": 0,
++                    "slippage_bps": 0,
++                    "initial_capital": 1000,
++                })
++        finally:
++            for guard in guards:
++                guard.stop()
++        self.assertEqual(response.status_code, 200)
++        body = response.get_json()
++        self.assertTrue(body["ok"])
++        self.assertEqual(body["symbol"], "SPY")
++        self.assertEqual(body["feed"], "iex")
++        self.assertEqual(load.call_count, 1)
++        self.assertIn("max_drawdown", body)
++        self.assertIn("win_rate", body)
++        self.assertIn("equity", body)
++        self.assertEqual(body["bar_count"], 6)
++
++    def test_bad_backtest_inputs_do_not_place_orders(self):
++        guards = self._forbid_broker_io()
++        for guard in guards:
++            guard.start()
++        try:
++            with patch.object(chart, "_load_bars", return_value=([], "iex")):
++                response = self.client.post("/api/chart/backtest", json={
++                    "symbol": "SPY", "tf": "1D", "strategy": "breakout"})
++        finally:
++            for guard in guards:
++                guard.stop()
++        self.assertEqual(response.status_code, 400)
++        self.assertFalse(response.get_json()["ok"])
++
++    def test_drawings_round_trip_without_touching_config(self):
++        guards = self._forbid_broker_io()
++        for guard in guards:
++            guard.start()
++        try:
++            rejected = self.client.post("/api/chart/drawings", json={
++                "symbol": "SPY", "drawings": [{"kind": "hline", "price": "high"}]})
++            saved = self.client.post("/api/chart/drawings", json={
++                "symbol": "SPY",
++                "drawings": [
++                    {"kind": "hline", "price": 100},
++                    {"kind": "trend", "a": {"time": 20, "price": 5}, "b": {"time": 10, "price": 6}},
++                ],
++            })
++            loaded = self.client.get("/api/chart/drawings?symbol=SPY")
++            cleared = self.client.post("/api/chart/drawings", json={"symbol": "AAPL", "drawings": []})
++        finally:
++            for guard in guards:
++                guard.stop()
++        self.assertEqual(rejected.status_code, 400)
++        self.assertEqual(saved.status_code, 200)
++        drawings = saved.get_json()["drawings"]
++        self.assertEqual(drawings[0]["kind"], "hline")
++        self.assertEqual(drawings[1]["a"]["time"], 10)
++        self.assertEqual(drawings[1]["b"]["time"], 20)
++        self.assertEqual(loaded.get_json()["drawings"], drawings)
++        self.assertEqual(cleared.status_code, 200)
++        self.assertTrue(self.drawings.is_file())
++        self.assertNotIn("config.json", str(self.drawings))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff -ruN tt-old/tests/test_studies.py tt-new/tests/test_studies.py
+--- tt-old/tests/test_studies.py	1970-01-01 00:00:00.000000000 +0000
++++ tt-new/tests/test_studies.py	2026-10-20 23:21:16.182639832 +0000
+@@ -0,0 +1,384 @@
++"""Offline indicator and backtest checks. No network and no broker."""
++import datetime as dt
++import math
++import pathlib
++import unittest
++
++import studies
++
++
++def near(testcase, actual, expected, epsilon=1e-8):
++    testcase.assertIsNotNone(actual)
++    testcase.assertTrue(math.isfinite(actual))
++    testcase.assertLessEqual(abs(actual - expected), epsilon, "%s != %s" % (actual, expected))
++
++
++def flat(time, price, **extras):
++    opened = extras.get("open", price)
++    close = extras.get("close", price)
++    return {
++        "time": time,
++        "open": opened,
++        "high": extras.get("high", max(opened, close)),
++        "low": extras.get("low", min(opened, close)),
++        "close": close,
++        "volume": extras.get("volume", 1),
++    }
++
++
++def utc(year, month, day, hour=0, minute=0):
++    return int(dt.datetime(year, month, day, hour, minute, tzinfo=dt.timezone.utc).timestamp())
++
++
++class SmaTests(unittest.TestCase):
++    def test_trailing_window_stays_empty_until_full(self):
++        result = studies.sma([1, 2, 3, 4, 5], 3)
++        self.assertEqual(result[:2], [None, None])
++        near(self, result[2], 2)
++        near(self, result[3], 3)
++        near(self, result[4], 4)
++
++    def test_short_series_is_all_none(self):
++        self.assertEqual(studies.sma([1, 2], 5), [None, None])
++
++    def test_whole_float_period_is_accepted_and_other_periods_are_not(self):
++        result = studies.sma([1, 2, 3, 4, 5], 3.0)
++        near(self, result[2], 2)
++        with self.assertRaises(ValueError):
++            studies.sma([1, 2, 3], 1.5)
++        with self.assertRaises(ValueError):
++            studies.sma([1, 2, 3], True)
++        with self.assertRaises(ValueError):
++            studies.sma([1, 2, 3], 0)
++
++
++class EmaTests(unittest.TestCase):
++    def test_sma_seed_then_multiplier(self):
++        result = studies.ema([10, 11, 12, 13], 3)
++        self.assertIsNone(result[0])
++        self.assertIsNone(result[1])
++        near(self, result[2], 11)
++        near(self, result[3], 12)
++
++    def test_period_one_tracks_the_series(self):
++        self.assertEqual(studies.ema([4, 7, 2], 1), [4, 7, 2])
++
++
++class RsiTests(unittest.TestCase):
++    def test_wilder_smoothing(self):
++        result = studies.rsi([10, 11, 12, 11, 13], 3)
++        self.assertEqual(result[:3], [None, None, None])
++        near(self, result[3], 100 - 100 / 3)
++        near(self, result[4], 100 - 100 / 6)
++
++    def test_all_gains_are_100(self):
++        near(self, studies.rsi([1, 2, 3, 4], 3)[3], 100)
++
++    def test_too_few_changes_stay_none(self):
++        self.assertTrue(all(value is None for value in studies.rsi([1, 2, 3], 14)))
++
++
++class MacdTests(unittest.TestCase):
++    def test_line_signal_and_histogram(self):
++        result = studies.macd(list(range(1, 11)), 3, 5, 3)
++        self.assertIsNone(result["macd"][3])
++        near(self, result["macd"][4], 1)
++        near(self, result["macd"][9], 1)
++        self.assertIsNone(result["signal"][5])
++        near(self, result["signal"][6], 1)
++        near(self, result["histogram"][6], 0)
++        near(self, result["histogram"][9], 0)
++
++    def test_fast_must_be_shorter_than_slow(self):
++        with self.assertRaises(ValueError):
++            studies.macd([1, 2, 3, 4, 5], 5, 5, 3)
++
++
++class BollingerTests(unittest.TestCase):
++    def test_population_standard_deviation(self):
++        result = studies.bollinger([10, 12, 14], 3, 2)
++        deviation = math.sqrt(8 / 3)
++        near(self, result["middle"][2], 12)
++        near(self, result["upper"][2], 12 + 2 * deviation)
++        near(self, result["lower"][2], 12 - 2 * deviation)
++        near(self, result["upper"][2] - result["middle"][2], result["middle"][2] - result["lower"][2])
++
++    def test_zero_multiplier_collapses_to_the_mean(self):
++        result = studies.bollinger([2, 4, 6], 3, 0)
++        near(self, result["upper"][2], 4)
++        near(self, result["lower"][2], 4)
++
++
++class VwapTests(unittest.TestCase):
++    def test_intraday_resets_on_the_new_york_date(self):
++        bars = [
++            {"time": utc(2024, 1, 1, 15), "high": 3, "low": 1, "close": 2, "volume": 10},
++            {"time": utc(2024, 1, 2, 4), "high": 5, "low": 3, "close": 4, "volume": 10},
++            {"time": utc(2024, 1, 2, 5), "high": 9, "low": 3, "close": 6, "volume": 5},
++        ]
++        result = studies.vwap(bars, "5m")
++        near(self, result[0], 2)
++        near(self, result[1], 3)
++        near(self, result[2], 6)
++
++    def test_zero_volume_does_not_move_the_running_vwap(self):
++        bars = [
++            {"time": utc(2024, 1, 1, 15), "high": 3, "low": 1, "close": 2, "volume": 10},
++            {"time": utc(2024, 1, 1, 15, 1), "high": 100, "low": 0, "close": 50, "volume": 0},
++        ]
++        result = studies.vwap(bars, "1H")
++        near(self, result[0], 2)
++        near(self, result[1], 2)
++
++    def test_daily_vwap_accumulates_across_new_york_dates(self):
++        bars = [
++            {"time": utc(2024, 1, 1), "high": 3, "low": 1, "close": 2, "volume": 10},
++            {"time": utc(2024, 1, 2), "high": 5, "low": 3, "close": 4, "volume": 10},
++        ]
++        result = studies.vwap(bars, "1D")
++        near(self, result[0], 2)
++        near(self, result[1], 3)
++        self.assertEqual(studies.pack(bars, "1D")["vwap_label"], "Cumulative VWAP")
++        self.assertEqual(studies.pack(bars, "15m")["vwap_label"], "Session VWAP")
++
++    def test_volume_keeps_zero_and_drops_non_finite(self):
++        self.assertEqual(studies.volumes([
++            {"volume": 12},
++            {"volume": float("nan")},
++            {"volume": 0},
++            {"volume": True},
++        ]), [12.0, None, 0.0, None])
++
++
++class PackTests(unittest.TestCase):
++    def test_every_series_matches_the_bar_count(self):
++        bars = [flat(index, 10 + index, volume=index + 1) for index in range(30)]
++        packed = studies.pack(bars, "1H")
++        for key, value in packed.items():
++            if key == "vwap_label":
++                continue
++            self.assertEqual(len(value), len(bars), key)
++
++
++class DrawdownTests(unittest.TestCase):
++    def test_peak_to_trough(self):
++        near(self, studies.max_drawdown([100, 80, 130, 90]), 40 / 130)
++
++    def test_flat_or_empty(self):
++        near(self, studies.max_drawdown([10, 11, 12]), 0)
++        near(self, studies.max_drawdown([5]), 0)
++        self.assertIsNone(studies.max_drawdown([]))
++
++
++class FillTests(unittest.TestCase):
++    def test_fills_the_next_open_and_not_the_signal_bar(self):
++        bars = [
++            flat(0, 10),
++            flat(1, 50, open=10, close=50),
++            flat(2, 20),
++            flat(3, 20),
++            flat(4, 30),
++        ]
++        result = studies.simulate_fills(bars, [0, 1, 1, 0, 0], initial_capital=1000)
++        self.assertEqual(result["trade_count"], 1)
++        near(self, result["trades"][0]["entry_price"], 20)
++        near(self, result["trades"][0]["exit_price"], 30)
++        near(self, result["final_equity"], 1500)
++        near(self, result["return"], 0.5)
++        self.assertEqual(result["win_rate"], 1)
++        self.assertFalse(result["open_position"])
++
++    def test_last_bar_signal_does_not_open(self):
++        result = studies.simulate_fills(
++            [flat(0, 10), flat(1, 12), flat(2, 14)],
++            [0, 0, 1],
++            initial_capital=1000,
++        )
++        self.assertEqual(result["trade_count"], 0)
++        self.assertIsNone(result["win_rate"])
++        self.assertFalse(result["open_position"])
++        near(self, result["final_equity"], 1000)
++        near(self, result["return"], 0)
++        near(self, result["max_drawdown"], 0)
++
++    def test_open_position_is_marked_and_excluded_from_win_rate(self):
++        result = studies.simulate_fills(
++            [flat(0, 10), flat(1, 15, open=10, close=15)],
++            [1, 1],
++            initial_capital=100,
++        )
++        self.assertEqual(result["trade_count"], 0)
++        self.assertIsNone(result["win_rate"])
++        self.assertTrue(result["open_position"])
++        near(self, result["final_equity"], 150)
++        near(self, result["return"], 0.5)
++
++    def test_fees_on_entry_and_exit_can_turn_a_higher_exit_into_a_loss(self):
++        bars = [flat(0, 10), flat(1, 10), flat(2, 12)]
++        paid = studies.simulate_fills(bars, [1, 0, 0], fee_bps=1000, initial_capital=1000)
++        free = studies.simulate_fills(bars, [1, 0, 0], fee_bps=0, initial_capital=1000)
++        near(self, free["final_equity"], 1200)
++        near(self, paid["final_equity"], 972)
++        self.assertLess(paid["final_equity"], free["final_equity"])
++        self.assertEqual(paid["win_rate"], 0)
++        self.assertEqual(paid["trade_count"], 1)
++        near(self, paid["trades"][0]["pnl"], -28)
++
++    def test_slippage_buys_higher_and_sells_lower(self):
++        result = studies.simulate_fills(
++            [flat(0, 10), flat(1, 10), flat(2, 12)],
++            [1, 0, 0],
++            slippage_bps=1000,
++            initial_capital=1000,
++        )
++        near(self, result["trades"][0]["entry_price"], 11)
++        near(self, result["trades"][0]["exit_price"], 10.8)
++        near(self, result["final_equity"], (1000 / 11) * 10.8)
++
++    def test_fees_and_slippage_together(self):
++        result = studies.simulate_fills(
++            [flat(0, 10), flat(1, 10), flat(2, 12)],
++            [1, 0, 0],
++            fee_bps=100,
++            slippage_bps=50,
++            initial_capital=10000,
++        )
++        entry = 10 * 1.005
++        exit_price = 12 * 0.995
++        spend = 10000 * 0.99
++        shares = spend / entry
++        cash = shares * exit_price * 0.99
++        near(self, result["trades"][0]["entry_price"], entry)
++        near(self, result["trades"][0]["exit_price"], exit_price)
++        near(self, result["final_equity"], cash)
++
++    def test_unrealized_drawdown_while_open(self):
++        bars = [
++            flat(0, 10),
++            flat(1, 10),
++            flat(2, 10),
++            flat(3, 5, open=10, close=5),
++            flat(4, 10, open=5, close=10),
++            flat(5, 10),
++        ]
++        result = studies.simulate_fills(bars, [0, 1, 1, 1, 0, 0], initial_capital=100)
++        near(self, result["trades"][0]["entry_price"], 10)
++        near(self, result["trades"][0]["exit_price"], 10)
++        near(self, result["final_equity"], 100)
++        near(self, result["max_drawdown"], 0.5)
++        self.assertEqual(result["win_rate"], 0)
++        marked = [point["equity"] for point in result["equity"]]
++        near(self, marked[3], 50)
++        self.assertEqual(result["max_drawdown"], studies.max_drawdown(marked))
++
++    def test_win_rate_counts_only_round_trips_that_increase_cash(self):
++        result = studies.simulate_fills(
++            [flat(0, 10), flat(1, 10), flat(2, 12), flat(3, 12), flat(4, 10)],
++            [1, 0, 1, 0, 0],
++            initial_capital=100,
++        )
++        self.assertEqual(result["trade_count"], 2)
++        self.assertGreater(result["trades"][0]["pnl"], 0)
++        self.assertLess(result["trades"][1]["pnl"], 0)
++        near(self, result["win_rate"], 0.5)
++        near(self, result["final_equity"], 100)
++        near(self, result["max_drawdown"], 20 / 120)
++
++    def test_fee_and_capital_bounds(self):
++        bars = [flat(0, 10)]
++        with self.assertRaises(ValueError):
++            studies.simulate_fills(bars, [0], fee_bps=-1)
++        with self.assertRaises(ValueError):
++            studies.simulate_fills(bars, [0], initial_capital=0)
++        with self.assertRaises(ValueError):
++            studies.simulate_fills(bars, [0], fee_bps=10001)
++        with self.assertRaises(ValueError):
++            studies.simulate_fills(bars, [0], slippage_bps=10001)
++        with self.assertRaises(ValueError):
++            studies.simulate_fills(bars, [0], fee_bps=True)
++
++
++class StrategyTests(unittest.TestCase):
++    def test_sma_cross_is_long_only_when_fast_is_above_slow(self):
++        prices = [10, 10, 10, 11, 13, 16, 14, 12, 11]
++        bars = [flat(index, price) for index, price in enumerate(prices)]
++        self.assertEqual(studies.signals_sma_cross(bars, 2, 3), [0, 0, 0, 1, 1, 1, 1, 0, 0])
++        result = studies.run_backtest(bars, {
++            "strategy": "sma",
++            "fast": 2,
++            "slow": 3,
++            "fee_bps": 0,
++            "slippage_bps": 0,
++            "initial_capital": 1300,
++        })
++        self.assertEqual(result["trade_count"], 1)
++        near(self, result["trades"][0]["entry_price"], 13)
++        near(self, result["trades"][0]["exit_price"], 11)
++        near(self, result["final_equity"], 1100)
++        near(self, result["return"], -200 / 1300)
++        near(self, result["max_drawdown"], 500 / 1600)
++        self.assertEqual(result["win_rate"], 0)
++        self.assertIn("does not place orders", result["assumptions"])
++
++    def test_sma_cross_fee_reduces_the_same_trade(self):
++        prices = [10, 10, 10, 11, 13, 16, 14, 12, 11]
++        bars = [flat(index, price) for index, price in enumerate(prices)]
++        result = studies.run_backtest(bars, {
++            "strategy": "sma",
++            "fast": 2,
++            "slow": 3,
++            "fee_bps": 100,
++            "slippage_bps": 0,
++            "initial_capital": 1300,
++        })
++        near(self, result["final_equity"], 1078.11)
++        self.assertLess(result["final_equity"], 1100)
++
++    def test_rsi_hysteresis(self):
++        bars = [
++            flat(0, 10),
++            flat(1, 9, open=10, close=9),
++            flat(2, 8, open=20, close=8),
++            flat(3, 11, open=21, close=11),
++            flat(4, 12, open=30, close=12),
++        ]
++        result = studies.run_backtest(bars, {
++            "strategy": "rsi",
++            "period": 1,
++            "oversold": 30,
++            "overbought": 70,
++            "fee_bps": 0,
++            "slippage_bps": 0,
++            "initial_capital": 100,
++        })
++        self.assertEqual(result["trade_count"], 1)
++        near(self, result["trades"][0]["entry_price"], 20)
++        near(self, result["trades"][0]["exit_price"], 30)
++        near(self, result["final_equity"], 150)
++        near(self, result["return"], 0.5)
++        near(self, result["max_drawdown"], 0.6)
++        self.assertEqual(result["win_rate"], 1)
++
++    def test_rejects_bad_strategy_inputs(self):
++        bars = [flat(0, 1), flat(1, 1)]
++        with self.assertRaises(ValueError):
++            studies.run_backtest(bars, {"strategy": "rsi", "oversold": 80, "overbought": 20})
++        with self.assertRaises(ValueError):
++            studies.run_backtest(bars, {"strategy": "breakout"})
++        with self.assertRaises(ValueError):
++            studies.run_backtest(bars, {"strategy": "sma", "fast": 5, "slow": 5})
++
++
++class IsolationTests(unittest.TestCase):
++    def test_module_does_not_import_the_broker_or_flask(self):
++        lines = pathlib.Path(studies.__file__).read_text(encoding="utf-8").lower().splitlines()
++        imports = [line.strip() for line in lines if line.strip().startswith(("import ", "from "))]
++        joined = "\n".join(imports)
++        self.assertNotIn("broker", joined)
++        self.assertNotIn("flask", joined)
++        self.assertNotIn("submit_order", "\n".join(lines))
++        self.assertNotIn("submit_notional_buy", "\n".join(lines))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff -ruN tt-old/ui.py tt-new/ui.py
+--- tt-old/ui.py	2026-10-20 20:37:08.568922933 +0000
++++ tt-new/ui.py	2026-10-20 23:22:40.694292271 +0000
+@@ -54,7 +54,7 @@
+ def shell(active, title, body, script, extra_head=""):
+     return """<!doctype html><html><head><meta charset=utf-8><title>""" + title + """ · AlpacaDesk</title>""" + extra_head + "<style>" + CSS + """</style></head><body>
+ <aside id="sb"><div class="brand">📈 AlpacaDesk</div><div class="ws">Paper workspace</div>
+-<a class="nav """ + ("on" if active == "chart" else "") + """" href="/chart">▦ Overview</a><a class="nav """ + ("on" if active == "news" else "") + """" href="/news">📰 News</a>
++<a class="nav """ + ("on" if active == "chart" else "") + """" href="/chart">▦ Charts</a><a class="nav """ + ("on" if active == "news" else "") + """" href="/news">📰 News</a>
+ <a class="nav """ + ("on" if active == "strategies" else "") + """" href="/strategies">🧩 Strategies</a><a class="nav """ + ("on" if active == "performance" else "") + """" href="/performance">📊 Performance</a><a class="nav """ + ("on" if active == "toolkit" else "") + """" href="/toolkit">🧰 Gapper Toolkit</a><a class="nav" href="/stocks">📈 Stock Desk</a><a class="nav" href="/bots">🤖 Bots</a><a class="nav" href="/">🏠 Trade Tracker</a>
+ <div class="wlh"><span>Watchlist</span><span>Local</span></div><div id="wl"></div>
+ <div class="add"><input id="addsym" placeholder="Add symbol"><button class="btn" onclick="wlEdit(document.getElementById('addsym').value,'add')">+</button></div>

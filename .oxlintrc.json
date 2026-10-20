@@ -108,7 +108,6 @@
     ".codex",
     ".devin",
     ".factory",
-    "third_party",
-    "trading-terminal"
+    "third_party"
   ]
 }
