@@ -59,6 +59,11 @@ Thumbs.db
 /website/public/assets/social-card.png
 /website/.venv/
 
+# Separate Next.js lecture notes app
+/apps/lecture-notes/.next/
+/apps/lecture-notes/.env
+/apps/lecture-notes/.env*.local
+
 # Local Cloudflare development state
 /website/.wrangler/
 /website/.dev.vars*

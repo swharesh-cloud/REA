@@ -101,6 +101,7 @@
     "dist",
     "build",
     "node_modules",
+    "apps/lecture-notes",
     "docs/api",
     "coverage",
     ".turbo",
