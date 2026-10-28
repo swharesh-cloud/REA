@@ -4,8 +4,11 @@ import { test } from "node:test";
 import { sessionToMarkdown } from "./markdown";
 import { readMp3Frame, sliceMp3 } from "./mp3-slice";
 import { createSampleSession } from "./sample-lecture";
+import { readSettings } from "./settings";
 import { formatClock } from "./time";
 import { downsample, encodeWav, rootMeanSquare } from "./wav";
+import { parseWhisperTranscript } from "./whisper-json";
+import { cleanNotes, parseNotesJson } from "./clean-notes";
 
 test("formats a lecture clock with hours", () => {
   assert.equal(formatClock(65_000), "00:01:05");
@@ -44,4 +47,53 @@ test("exports sample notes as markdown with timestamps", () => {
   assert.match(markdown, /## Questions to review/u);
   assert.match(markdown, /00:00:04/u);
   assert.match(markdown, /## Transcript/u);
+});
+
+test("defaults to free local Whisper and Ollama", () => {
+  const settings = readSettings({});
+  assert.equal(settings.transcribeProvider, "local");
+  assert.equal(settings.notesProvider, "ollama");
+  assert.equal(settings.whisperBin, "whisper-cli");
+  assert.equal(settings.ollamaModel, "llama3.2");
+  assert.equal(settings.openaiTranscribeModel, "whisper-1");
+  assert.equal(settings.openaiNotesModel, "gpt-4o-mini");
+  assert.match(settings.whisperModel, /ggml-base\.en\.bin$/u);
+});
+
+test("rejects an unknown provider instead of calling a paid API", () => {
+  assert.throws(
+    () => readSettings({ TRANSCRIBE_PROVIDER: "gateway" }),
+    /TRANSCRIBE_PROVIDER must be local or openai/u,
+  );
+  assert.equal(
+    readSettings({ TRANSCRIBE_PROVIDER: "openai", NOTES_PROVIDER: "openai" })
+      .transcribeProvider,
+    "openai",
+  );
+});
+
+test("reads whisper.cpp json offsets as transcript segments", () => {
+  const parsed = parseWhisperTranscript(
+    JSON.stringify({
+      transcription: [
+        {
+          offsets: { from: 1200, to: 4500 },
+          text: " Chlorophyll reflects green.",
+        },
+      ],
+    }),
+  );
+  assert.equal(parsed.segments[0]?.startSecond, 1.2);
+  assert.equal(parsed.segments[0]?.endSecond, 4.5);
+  assert.equal(parsed.text, "Chlorophyll reflects green.");
+});
+
+test("cleans notes json that a small local model might wrap in text", () => {
+  const notes = cleanNotes(
+    parseNotesJson(
+      'Here are the notes:\n{"title":"Leaves","summary":"Light becomes sugar.","keyPoints":[{"text":"Green is reflected","timestampMs":"22000"}],"sections":[],"terms":[],"actionItems":[],"questions":[]}',
+    ),
+  );
+  assert.equal(notes.title, "Leaves");
+  assert.equal(notes.keyPoints[0]?.timestampMs, 22000);
 });

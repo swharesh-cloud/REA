@@ -1,134 +1,160 @@
 # Lecture Notes
 
-A separate Next.js app for live lecture notes. It records in the browser,
-transcribes short audio pieces, and asks a language model for organized notes.
-It does not use REA's analysis tools, and REA's CLI and MCP server are unchanged.
+Record a lecture in your browser and get a transcript plus study notes. The
+default setup is free and stays on your Mac: Whisper transcribes the audio,
+and Ollama writes the notes. You do not need a Vercel account, an API key, or
+a credit card.
 
-The recorder keeps a microphone stream open, slices it into about 20 seconds of
-16 kHz mono WAV, and sends each piece to the server. Notes refresh after the
-first useful transcript and then no more than once every 75 seconds, plus once
-when you stop. Sessions (title, transcript, notes, duration) stay in
-`localStorage` on this device. The audio itself is not saved.
+On this Mac, open `http://localhost:3000`. The microphone works on that
+address. An iPhone is different; see below.
 
-## What you need
+## Install once
 
-- Node.js 22 or newer
-- A [Vercel](https://vercel.com) account with [AI Gateway](https://vercel.com/docs/ai-gateway) credits
-- An AI Gateway API key for local development
+You need Homebrew and Node.js 22 or newer. The same two commands work on an
+Apple Silicon iMac and an Intel iMac.
 
-Transcription and notes are billed to that Vercel team. Nothing in the browser
-holds a provider key.
+```bash
+brew install whisper.cpp ollama node
+```
+
+`whisper.cpp` installs the `whisper-cli` program. Homebrew uses the Mac's
+graphics chip automatically on Apple Silicon. On Intel it uses the CPU. You
+do not pick a different install.
+
+## Start
+
+From this folder:
+
+```bash
+./start.sh
+```
+
+The first run downloads two files, then builds the app and opens the server:
+
+- Whisper `base.en`, about 150 MB. English speech, small and fast.
+- Ollama `llama3.2`, about 2 GB. Fits an 8 GB iMac next to the browser.
+
+Later runs skip the downloads. Then open `http://localhost:3000`.
+
+Press **Start**, allow the microphone, and talk. A transcript piece arrives
+about every 20 seconds. Notes show up after the first useful piece, then
+refresh about once a minute. **Pause**, **Stop**, **Upload audio**, **Copy
+Markdown**, and **Export .md** are on the page. Past lectures stay in this
+browser only. The recording itself is not saved.
+
+**View sample** shows the layout without running Whisper or Ollama.
+
+You can also use `npm run build && npm start` after the models are already
+downloaded. `./start.sh` is the one-command path.
+
+## Which models, and how fast
+
+These speeds are typical for this kind of Mac. They are not a benchmark from
+this project. The first transcription after a restart can take longer while
+macOS prepares the program. Later pieces are the numbers below.
+
+| Mac                                    | Whisper              | A 20-second piece                                                         | Notes model                           | Notes refresh           |
+| -------------------------------------- | -------------------- | ------------------------------------------------------------------------- | ------------------------------------- | ----------------------- |
+| Apple Silicon iMac (M1 or newer), 8 GB | `base.en` (default)  | often about a second                                                      | `llama3.2` (default, 3B, ~2 GB)       | often 10–40 seconds     |
+| Apple Silicon iMac, 16 GB              | `small.en` (~500 MB) | often a few seconds                                                       | `qwen2.5:7b` or `llama3.1:8b` (~5 GB) | slower, clearer notes   |
+| Intel iMac                             | stay on `base.en`    | several seconds, sometimes about as long as the audio on an older machine | stay on `llama3.2`                    | can be a minute or more |
+
+If pieces pile up, use a smaller Whisper file, `ggml-tiny.en.bin` (about 75 MB).
+Download it the same way as base and set `WHISPER_MODEL` to that path.
+
+To switch models, put this in `.env.local` and start again:
+
+```bash
+WHISPER_MODEL=./models/ggml-small.en.bin
+OLLAMA_MODEL=qwen2.5:7b
+```
+
+`./start.sh` downloads an Ollama model the first time that name is missing.
+For a Whisper file other than `base.en`, download it yourself from
+[ggerganov/whisper.cpp on Hugging Face](https://huggingface.co/ggerganov/whisper.cpp/tree/main).
+
+## Use it from an iPhone
+
+The phone's browser only allows the microphone on HTTPS, or on the phone's own
+`localhost`. `http://192.168.x.x:3000` will load the page and then refuse the
+mic.
+
+On the Mac, `http://localhost:3000` is enough.
+
+To open the recorder on a phone, add HTTPS with either of these:
+
+Cloudflare's quick tunnel (public URL, fine for a study session):
+
+```bash
+brew install cloudflared
+cloudflared tunnel --url http://localhost:3000
+```
+
+Open the `https://....trycloudflare.com` link on the phone.
+
+Tailscale (stays on your own machines): install Tailscale on the Mac and the
+phone, sign in, then on the Mac run `tailscale serve 3000`. Open the HTTPS
+address Tailscale prints.
+
+Stop the tunnel when class is over.
+
+## Optional: OpenAI instead of local models
+
+Leave the defaults if you want the free path. To pay OpenAI instead, copy
+`.env.example` to `.env.local` and set:
+
+```bash
+TRANSCRIBE_PROVIDER=openai
+NOTES_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+OPENAI_TRANSCRIBE_MODEL=whisper-1
+OPENAI_NOTES_MODEL=gpt-4o-mini
+```
+
+You can mix them. Local Whisper plus OpenAI notes, or the other way around,
+is fine. The key stays on the Mac. The browser never sees it.
+
+Prices below are from OpenAI's pricing page on 28 Oct 2026. Check
+https://developers.openai.com/api/docs/pricing before a long lecture.
+
+- `whisper-1` transcription: **$0.006 per minute, about $0.36 per hour** of audio.
+- `gpt-4o-mini-transcribe`: about **$0.003 per minute, about $0.18 per hour**.
+  OpenAI plans to remove `whisper-1` and the GPT-4o transcription models on
+  26 Feb 2027. `gpt-transcribe` is the newer file model at **$0.0045 per minute,
+  about $0.27 per hour**.
+- Notes with `gpt-4o-mini` ($0.15 / 1M input tokens, $0.60 / 1M output tokens):
+  refreshing about every 75 seconds for a one-hour lecture is roughly
+  **$0.05–$0.15**. One note pass at the end is usually a few cents.
+- The optional OpenAI route together is about **$0.40–$0.55 per hour** with
+  `whisper-1`, or less with `gpt-4o-mini-transcribe`.
+
+The local route does not call OpenAI. Software is free. You pay for electricity.
 
 ## Environment variables
 
-Copy the example file and fill in the key:
+| Variable                  | Default                     | What it does                      |
+| ------------------------- | --------------------------- | --------------------------------- |
+| `TRANSCRIBE_PROVIDER`     | `local`                     | `local` (whisper.cpp) or `openai` |
+| `NOTES_PROVIDER`          | `ollama`                    | `ollama` or `openai`              |
+| `WHISPER_BIN`             | `whisper-cli`               | Whisper program on your PATH      |
+| `WHISPER_MODEL`           | `./models/ggml-base.en.bin` | Path to the `.bin` model file     |
+| `OLLAMA_BASE_URL`         | `http://127.0.0.1:11434/v1` | Ollama's OpenAI-compatible API    |
+| `OLLAMA_MODEL`            | `llama3.2`                  | Model name from `ollama list`     |
+| `OPENAI_API_KEY`          | empty                       | Only for `openai` providers       |
+| `OPENAI_TRANSCRIBE_MODEL` | `whisper-1`                 | OpenAI transcription model        |
+| `OPENAI_NOTES_MODEL`      | `gpt-4o-mini`               | OpenAI notes model                |
+
+## Optional Docker image
+
+The free path is `./start.sh` on the Mac, because Whisper and Ollama run
+beside the app. The Dockerfile only builds the website. For OpenAI inside the
+container, pass `OPENAI_API_KEY` and set both providers to `openai`. For
+Ollama on the Mac, set `OLLAMA_BASE_URL=http://host.docker.internal:11434/v1`.
+
+## Develop
 
 ```bash
-cd apps/lecture-notes
-cp .env.example .env.local
-```
-
-| Variable                   | Required  | Purpose                                                           |
-| -------------------------- | --------- | ----------------------------------------------------------------- |
-| `AI_GATEWAY_API_KEY`       | Local dev | AI Gateway API key. Create it under Team → AI Gateway → API Keys. |
-| `LECTURE_TRANSCRIBE_MODEL` | No        | Transcription model ID. Default `openai/whisper-1`.               |
-| `LECTURE_NOTES_MODEL`      | No        | Notes model ID. Default `google/gemini-3-flash`.                  |
-
-On Vercel, a deployment can authenticate with OIDC instead of
-`AI_GATEWAY_API_KEY`. Vercel injects that token for the project. If an API key
-is set, the AI SDK uses the key and ignores OIDC. Do not commit `.env.local`
-or any real key.
-
-Model IDs come from the live catalog, `https://ai-gateway.vercel.sh/v1/models`.
-The defaults below were checked against that catalog on 28 Oct 2026.
-
-## Local run
-
-```bash
-cd apps/lecture-notes
 npm install
+npm test
 npm run dev
 ```
-
-Open `http://localhost:3000`. Allow the microphone when the browser asks. Use
-**View sample**, or open `/?sample=1`, to inspect the notes layout without
-spending credits.
-
-```bash
-npm test
-npm run build
-```
-
-## Deploy on Vercel
-
-1. Import `swharesh-cloud/REA` as a Vercel project.
-2. Set **Root Directory** to `apps/lecture-notes`.
-3. Leave the framework preset as Next.js. The install and build commands are
-   `npm install` and `npm run build`.
-4. Add `AI_GATEWAY_API_KEY`, or leave it unset and rely on Vercel OIDC for a
-   team that has AI Gateway enabled.
-5. Optionally set `LECTURE_TRANSCRIBE_MODEL` and `LECTURE_NOTES_MODEL`.
-6. Deploy. The site must be served from the domain root. The audio worklet is
-   loaded from `/pcm-capture-worklet.js`.
-
-iPhone Safari and desktop browsers need HTTPS, which Vercel provides. The mic
-button has to be a tap, not an automatic start. iOS can interrupt capture when
-the page is backgrounded; the app pauses and waits for **Resume**. A screen
-wake lock is requested when the browser allows it.
-
-## Recording and upload
-
-- **Start**, **Pause** / **Resume**, and **Stop**, with a running timer.
-- Live transcript from ~20 second pieces. Silence is not sent.
-- **Upload audio** for an existing file.
-  - Files up to 3.5 MB (except WAV) are sent once.
-  - MP3 files up to 24 MB are split on MP3 frames in the browser.
-  - Other formats up to 8 MB are decoded and sliced into 20 second WAV pieces.
-  - Larger files are refused. Record those in the app so the tab never holds
-    the whole lecture.
-- Each server request stays under Vercel's ~4.5 MB request-body limit.
-- Notes include a title, summary, key points, headed bullets, terms, action
-  items, and review questions. Timestamp buttons jump to the nearest transcript
-  line.
-- **Copy Markdown** and **Export .md**. The library lists saved lectures.
-
-## Cost
-
-Prices are AI Gateway catalog rates observed on 28 Oct 2026. They change.
-Confirm them on the model page before a long lecture. Vercel hosting is billed
-separately from AI Gateway credits. A Hobby account includes a free hosting
-allowance; function time and bandwidth follow the current plan.
-
-### Transcription, per hour of audio
-
-| Model                        | Catalog rate          | About one hour |
-| ---------------------------- | --------------------- | -------------- |
-| `openai/whisper-1` (default) | $0.0001 / second      | **$0.36**      |
-| `openai/gpt-transcribe`      | $0.000075 / second    | $0.27          |
-| `elevenlabs/scribe-v2`       | $0.000030556 / second | $0.11          |
-| `microsoft/mai-transcribe-2` | $0.00002778 / second  | $0.10          |
-
-Set `LECTURE_TRANSCRIBE_MODEL` to switch. This app sends WAV for live capture
-and for decoded uploads, which Microsoft's batch transcriber accepts. Some
-token-priced models (for example `openai/gpt-4o-mini-transcribe`) bill audio
-tokens instead of duration, so their hourly cost depends on that tokenizer.
-
-### Notes, per hour of lecture
-
-Default model: `google/gemini-3-flash` at low reasoning effort.
-
-- Input about $0.50 / 1M tokens, output about $3 / 1M tokens.
-- A spoken hour is roughly 8,000–12,000 words. Rebuilding notes on the 75
-  second cadence is on the order of a few hundred thousand input tokens and
-  under about 80,000 output tokens.
-- That is roughly **$0.15–$0.40** for notes for one recorded hour.
-- One note pass at the end, if you do not leave live refresh running, is
-  usually a few cents.
-- **Update notes** spends one extra call.
-
-### Together
-
-With the defaults, plan on about **$0.50–$0.80 per hour** of audio, mostly
-Whisper plus repeated note updates. An uploaded hour costs about the same as
-recording it, because the same models run. AI Gateway credits are the bill;
-the app does not add a markup.

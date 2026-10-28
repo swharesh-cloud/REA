@@ -188,13 +188,13 @@ export function Studio() {
         if (
           body &&
           typeof body === "object" &&
-          "gatewayConfigured" in body &&
-          (body as { gatewayConfigured?: unknown }).gatewayConfigured === false
+          "message" in body &&
+          typeof (body as { message?: unknown }).message === "string"
         ) {
+          const message = (body as { message: string }).message;
+          if (!message) return;
           setStatus((current) =>
-            current === "Ready when you are."
-              ? "Add AI_GATEWAY_API_KEY before recording. The sample still works."
-              : current,
+            current === "Ready when you are." ? message : current,
           );
         }
       })

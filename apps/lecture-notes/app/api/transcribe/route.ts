@@ -1,7 +1,9 @@
 import { transcribe } from "ai";
+import { createOpenAI } from "@ai-sdk/openai";
 
 import { publicModelError } from "../../../lib/model-error";
-import { transcribeModel } from "../../../lib/models";
+import { readSettings } from "../../../lib/settings";
+import { SetupError, transcribeLocalWhisper } from "../../../lib/whisper-local";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -41,13 +43,36 @@ export async function POST(request: Request) {
     );
   }
   try {
+    const settings = readSettings();
     const bytes = new Uint8Array(await audio.arrayBuffer());
-    const model = transcribeModel();
+    if (settings.transcribeProvider === "local") {
+      const result = await transcribeLocalWhisper({
+        bin: settings.whisperBin,
+        modelPath: settings.whisperModel,
+        audio: bytes,
+        fileName: audio.name || "audio.wav",
+        signal: request.signal,
+      });
+      return Response.json({
+        text: result.text,
+        segments: result.segments,
+        durationInSeconds: null,
+        language: null,
+      });
+    }
+    if (!settings.openaiApiKey) {
+      throw new SetupError(
+        "Set OPENAI_API_KEY, or leave TRANSCRIBE_PROVIDER unset for free local Whisper.",
+      );
+    }
+    const model = settings.openaiTranscribeModel;
     const result = await transcribe({
-      model,
+      model: createOpenAI({ apiKey: settings.openaiApiKey }).transcription(
+        model,
+      ),
       audio: bytes,
       abortSignal: request.signal,
-      ...(model.startsWith("openai/")
+      ...(model.startsWith("whisper")
         ? {
             providerOptions: {
               openai: { timestampGranularities: ["segment"] },
@@ -62,11 +87,17 @@ export async function POST(request: Request) {
       language: result.language ?? null,
     });
   } catch (error) {
-    if (request.signal.aborted) {
+    if (
+      request.signal.aborted ||
+      (error instanceof Error && error.name === "AbortError")
+    ) {
       return Response.json(
         { error: "Transcription was cancelled." },
         { status: 499 },
       );
+    }
+    if (error instanceof SetupError) {
+      return Response.json({ error: error.message }, { status: error.status });
     }
     return Response.json({ error: publicModelError(error) }, { status: 502 });
   }

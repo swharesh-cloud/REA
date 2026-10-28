@@ -11,11 +11,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "mac": "bash ./start.sh",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test lib/*.test.ts"
   },
   "dependencies": {
-    "@ai-sdk/gateway": "^4.0.128",
+    "@ai-sdk/openai": "^4.0.104",
     "ai": "^7.0.155",
     "next": "^16.4.3",
     "react": "^19.3.1",
