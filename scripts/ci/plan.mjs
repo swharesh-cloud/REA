@@ -169,6 +169,9 @@ if (tier === "reused") {
       .split("\0")
       .filter(Boolean);
     for (const file of files) {
+      // Lecture Notes is a separate Next.js app with its own build. It is not
+      // part of REA's analysis, package, or provider verification.
+      if (file.startsWith("apps/lecture-notes/")) continue;
       if (matchesAny(file, SCOPES.reverse_tools)) selected.reverse_tools = true;
       if (
         /^(README(?:_[^/]+)?\.md|AGENTS\.md|CONTRIBUTING\.md|CHANGELOG\.md|SECURITY\.md|native\/windows\/README\.md|\.github\/pull_request_template\.md)$/.test(

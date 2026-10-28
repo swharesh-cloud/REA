@@ -118,6 +118,18 @@ it("reuses only scheduled qualification and preserves every explicit full reques
   ).toBe("fast");
 });
 
+it("keeps the lecture notes app outside REA verification lanes", async () => {
+  const { directory, base } = await fixture();
+  const head = await change(directory, [
+    "apps/lecture-notes/README.md",
+    "apps/lecture-notes/app/page.tsx",
+  ]);
+  const plan = await classify(directory, base, head);
+  const { CI_FLAGS } = await loadScopes();
+  expect(plan.tier).toBe("fast");
+  for (const flag of CI_FLAGS) expect(plan[flag]).toBe(false);
+});
+
 it("keeps every translated README and authored guide on the documentation lane", async () => {
   const { directory, base } = await fixture();
   const readmes = (await readdir(new URL("../../../", import.meta.url))).filter(
