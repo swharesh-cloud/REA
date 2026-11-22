@@ -1,0 +1,64 @@
+--- a/app.py
++++ b/app.py
+@@ -338,9 +338,11 @@
+ app.register_blueprint(cbc_bp)
+ from mood import bp as mood_bp, start_loop as start_mood_loop  # 🌡 Market Mood (ATLAS-inspired), observe-only regime check (/mood)
+ app.register_blueprint(mood_bp)
++from builder_web import bp as builder_bp  # Strategy Builder. Paper orders only after a saved strategy is enabled.
++app.register_blueprint(builder_bp)
+ 
+ import re as _re
+-_NAV = [("/chart", "▦ Charts"), ("/news", "📰 News"), ("/strategies", "🧩 Strategies"), ("/performance", "📊 Performance"),
++_NAV = [("/chart", "▦ Charts"), ("/news", "📰 News"), ("/strategies", "🧩 Strategies"), ("/builder", "🧩 Strategy Builder"), ("/performance", "📊 Performance"),
+         ("/toolkit", "🧰 Gapper Toolkit"), ("/screener", "🔎 Screener"), ("/book-value", "📒 Book Value"), ("/heatmap", "🟩 Heat Map"), ("/live", "⚡ Live"), ("/gfs/alerts", "🔔 GFS Alerts"), ("/swing-4h", "🕓 4H Swing"), ("/orb", "🎯 ORB"), ("/cbc", "🔁 CBC Flip"), ("/mood", "🌡 Market Mood"), ("/replay", "⏯ Trade Replay"), ("/kronos-report", "🔮 Kronos Report"), ("/stocks", "📈 Stock Desk"), ("/bots", "🤖 Bots"), ("/", "🏠 Trade Tracker")]
+ def _wrap_sidebar(b):  # layout only: put pages that have no shared sidebar into the same sidebar shell
+     p = request.path; act = "/bots" if p.startswith("/desk/bots") else "/performance" if p.startswith("/performance") else p
+--- a/ui.py
++++ b/ui.py
+@@ -55,7 +55,7 @@
+     return """<!doctype html><html><head><meta charset=utf-8><title>""" + title + """ · AlpacaDesk</title>""" + extra_head + "<style>" + CSS + """</style></head><body>
+ <aside id="sb"><div class="brand">📈 AlpacaDesk</div><div class="ws">Paper workspace</div>
+ <a class="nav """ + ("on" if active == "chart" else "") + """" href="/chart">▦ Charts</a><a class="nav """ + ("on" if active == "news" else "") + """" href="/news">📰 News</a>
+-<a class="nav """ + ("on" if active == "strategies" else "") + """" href="/strategies">🧩 Strategies</a><a class="nav """ + ("on" if active == "performance" else "") + """" href="/performance">📊 Performance</a><a class="nav """ + ("on" if active == "toolkit" else "") + """" href="/toolkit">🧰 Gapper Toolkit</a><a class="nav """ + ("on" if active == "screener" else "") + """" href="/screener">🔎 Screener</a><a class="nav """ + ("on" if active == "book-value" else "") + """" href="/book-value">📒 Book Value</a><a class="nav """ + ("on" if active == "kronos" else "") + """" href="/kronos-report">🔮 Kronos Report</a><a class="nav" href="/stocks">📈 Stock Desk</a><a class="nav" href="/bots">🤖 Bots</a><a class="nav" href="/">🏠 Trade Tracker</a>
++<a class="nav """ + ("on" if active == "strategies" else "") + """" href="/strategies">🧩 Strategies</a><a class="nav """ + ("on" if active == "builder" else "") + """" href="/builder">🧩 Strategy Builder</a><a class="nav """ + ("on" if active == "performance" else "") + """" href="/performance">📊 Performance</a><a class="nav """ + ("on" if active == "toolkit" else "") + """" href="/toolkit">🧰 Gapper Toolkit</a><a class="nav """ + ("on" if active == "screener" else "") + """" href="/screener">🔎 Screener</a><a class="nav """ + ("on" if active == "book-value" else "") + """" href="/book-value">📒 Book Value</a><a class="nav """ + ("on" if active == "kronos" else "") + """" href="/kronos-report">🔮 Kronos Report</a><a class="nav" href="/stocks">📈 Stock Desk</a><a class="nav" href="/bots">🤖 Bots</a><a class="nav" href="/">🏠 Trade Tracker</a>
+ <div class="wlh"><span>Watchlist</span><span>Local</span></div><div id="wl"></div>
+ <div class="add"><input id="addsym" placeholder="Add symbol"><button class="btn" onclick="wlEdit(document.getElementById('addsym').value,'add')">+</button></div>
+ <div class="sbf">US stocks &amp; ETFs<br>IEX market data<br><br><span id="conn">Paper · connecting…</span><br><span>Read-only · No orders</span></div></aside>
+--- a/sdesk/run.py
++++ b/sdesk/run.py
+@@ -5,6 +5,12 @@
+ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+ from sdesk.common import now_ct, save_json, load_json, stamp
+ from sdesk import executor, agents, pullback, gappers, gapfade
++
++def _builder_cycle():
++    """Strategy Builder paper pass. No-op unless a saved strategy has paper enabled."""
++    from builder_live import cycle
++    cycle()
++
+ 
+ CYCLES = {"morning": [("screener+analysts+checker+executor", executor.morning), ("ema_pullback", pullback.morning)],
+           "exits": [("exit_manager", executor.exit_manager), ("ema_pullback_exits", pullback.exits), ("premarket_gappers_exits", gappers.exits)],
+@@ -18,7 +24,8 @@
+           "gf_eod": [("gap_fade_eod", lambda: gapfade.monitor(eod=True))],
+           "protect": [("reprice_brackets", executor.reprice_open)],
+           "weekly_report": [("weekly_report", lambda: __import__("sdesk.perf", fromlist=["x"]).weekly_report())],
+-          "pulse": [("market_pulse", lambda: agents.market_pulse(force=True))]}
++          "pulse": [("market_pulse", lambda: agents.market_pulse(force=True))],
++          "builder": [("builder_paper", _builder_cycle)]}
+ 
+ def run_cycle(name):
+     log = load_json("runs.json", [])
+@@ -46,6 +53,12 @@
+     if (t.hour, t.minute) == (14, 50): out.append("gf_eod")
+     if (8, 30) <= (t.hour, t.minute) <= (13, 30) and t.minute % 5 == 0: out.append("morning")   # Momentum+EMA Pullback entry window 8:30-1:30 CT, every 5 min (user 2026-11-04)
+     if (t.hour, t.minute) in ((8, 45), (14, 45)) or (t.minute == 15 and t.hour in (3, 7, 11, 15, 19, 23)): out.append("exits")
++    try:
++        from builder_live import wants_cycle
++        if wants_cycle(t):
++            out.append("builder")
++    except Exception:
++        pass
+     return out
+ 
+ def next_run(cycle):
