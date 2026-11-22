@@ -13,9 +13,12 @@ SRC=/path/to/REA/trade-tracker
 cd ~/TradeTracker
 cp "$SRC/builder.py" "$SRC/builder_data.py" "$SRC/builder_live.py" \
    "$SRC/builder_web.py" "$SRC/builder_demo.py" .
-mkdir -p tests
+mkdir -p static tests
+cp "$SRC/static/builder.css" "$SRC/static/builder.js" static/
 cp "$SRC"/tests/test_builder_*.py tests/
 ```
+
+`builder.css` and `builder.js` are served by the builder blueprint from the `static/` folder next to `builder_web.py` (`/builder-static/…`). They sit beside the existing `polish.css` and lightweight-charts file. Do not replace those.
 
 Do not copy `data/`, `.env`, account numbers, or trade history. Strategies you save later are JSON files under `~/TradeTracker/data/builder/`. The paper-trading log is `data/builder/_live.json`. Neither file is created until you save or run a paper strategy.
 
@@ -90,7 +93,13 @@ The tests use fixture bars and never call Alpaca. `ALPACA_PAPER_KEY_ID` / `ALPAC
 
 ## 4. What the page does
 
-- **Script or form.** The script is what gets saved. "Update script" writes the form into the rule language; "Read script" fills the form from it.
+The page is a sticky toolbar (name, Draft / Saved / Paper ON, Backtest, Save, Enable paper, Delete), example cards, a saved-strategy list, and tabbed rule sections (Entry, Exit, Filters, Session, Sizing) over a syntax-colored script with indicator chips and live parse errors. After a backtest: KPI cards, equity curve, price chart with entry/exit markers and a symbol picker, a P&L histogram, a per-symbol table, and a sortable trade list. Exit presets can be compared side by side (the script's exits versus Tight 0.5%/1%, and similar). A progress bar tracks the download.
+
+The symbol list holds up to 200 names. **ORB live universe** calls `gapfade._universe` (read-only; it does not change Gap Fade or place orders) and caps the result at 200. Index ETFs, Mag 7, and the desk watchlist are local presets. Alpaca bars download in batches of 40 and are cached under `data/builder/cache/` so a repeat of the same range does not refetch. A 180-name, 3-month, 5-minute run is still a large download the first time; the progress line shows which batch is in flight.
+
+### What stayed the same
+
+- **Script or form.** The script is what gets saved. "Apply section to script" writes the open tab into the rule language. "Read script into form" fills the tabs from it.
 - **Backtest** loads Alpaca stock bars from `https://data.alpaca.markets/v2/stocks/bars` (SIP, then IEX), the same host the other backtests use. It does not send orders.
 - **Save / delete** writes `data/builder/<id>.json`. Delete is refused while paper trading is on. Deleting does not cancel open orders; turn paper off first, and flatten from Alpaca if a bracket is still working.
 - **Enable paper** is off by default. Turning it on lets the scheduler place Alpaca **paper** bracket orders for that strategy only. The Stock Desk kill switch and daily-loss halt are read, not changed: while either is set, the builder skips new entries. It never cancels an order whose client id does not start with its own prefix, and a flat-by exit sells only the share count that strategy opened.

@@ -32,6 +32,8 @@ TF_ALIASES = {
 }
 ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
 SYM_RE = re.compile(r"^[A-Z][A-Z0-9.]{0,9}$")
+# A full ORB-style scan is about 180 names. 200 leaves room without an unbounded download.
+SYMBOL_CAP = 200
 
 # Used only when excluded.py cannot be imported (standalone tests, partial copy).
 # On a Trade Tracker install, excluded.blocked is the authority.
@@ -666,8 +668,8 @@ def parse_symbols(text: str) -> list[str]:
             raise ParseError(f"bad symbol {part!r}")
         if part not in out:
             out.append(part)
-    if len(out) > 30:
-        raise ParseError("use at most 30 symbols")
+    if len(out) > SYMBOL_CAP:
+        raise ParseError(f"use at most {SYMBOL_CAP} symbols")
     return out
 
 

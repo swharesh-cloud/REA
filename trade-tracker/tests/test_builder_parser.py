@@ -155,6 +155,13 @@ def test_save_list_delete_round_trip(tmp_path):
     assert builder.list_strategies(tmp_path) == []
 
 
+def test_symbol_list_allows_two_hundred_names():
+    names = ",".join(f"S{i:03d}" for i in range(200))
+    assert len(builder.parse_symbols(names)) == 200
+    with pytest.raises(builder.ParseError):
+        builder.parse_symbols(",".join(f"S{i:03d}" for i in range(201)))
+
+
 def test_paper_requires_a_symbol(tmp_path):
     row = builder.save_strategy({"script": "long when close > 1\n"}, root=tmp_path)
     with pytest.raises(ValueError):

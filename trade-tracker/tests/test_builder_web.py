@@ -44,6 +44,9 @@ def test_page_renders_and_backtest_returns_charts(monkeypatch, tmp_path):
     assert payload["equity"][0]["value"] == 100000
     assert payload["charts"]["SPY"]["bars"]
     assert any(m["text"] in ("L", "S") for m in payload["charts"]["SPY"]["markers"])
+    assert payload["histogram"] and payload["by_symbol"][0]["symbol"] == "SPY"
+    assert client.get("/builder-static/builder.css").status_code == 200
+    assert client.get("/builder-static/builder.js").status_code == 200
 
 
 def test_demo_refuses_to_enable_paper(monkeypatch, tmp_path):
@@ -57,3 +60,43 @@ def test_demo_refuses_to_enable_paper(monkeypatch, tmp_path):
     denied = client.post(f"/api/builder/strategies/{row['id']}/paper", json={"paper": True})
     assert denied.status_code == 400
     assert client.get("/api/builder/strategies").get_json()["strategies"][0]["paper"] is False
+
+
+def test_compare_and_job_progress(monkeypatch, tmp_path):
+    client = _app(monkeypatch, tmp_path, demo=False)
+    sync = client.post("/api/builder/backtest", json={
+        "script": "long when close > 10\ntake profit 1%\nstop 5%\n",
+        "symbols": "SPY",
+        "start": "2026-10-05",
+        "end": "2026-10-06",
+        "compare": [{"label": "Wide", "take_profit_pct": 2, "stop_pct": 3}],
+    }).get_json()
+    assert sync["ok"] is True
+    assert sync["compare"][0]["label"] == "Wide"
+    assert "stats" in sync["compare"][0]
+    started = client.post("/api/builder/backtest/jobs", json={
+        "script": builder.EXAMPLES[2]["script"],
+        "symbols": ["SPY"],
+        "start": "2026-10-05",
+        "end": "2026-10-20",
+    }).get_json()
+    assert started["ok"] is True
+    job = {}
+    for _ in range(40):
+        job = client.get("/api/builder/backtest/jobs/" + started["job"]).get_json()
+        if job.get("status") in ("done", "error"):
+            break
+        import time
+        time.sleep(0.05)
+    assert job["status"] == "done"
+    assert job["result"]["ok"] is True
+
+
+def test_universes_do_not_touch_orders_when_gapfade_is_missing(monkeypatch, tmp_path):
+    client = _app(monkeypatch, tmp_path, demo=False)
+    catalog = client.get("/api/builder/universes").get_json()
+    assert catalog["cap"] == 200
+    assert any(item["id"] == "orb" and item["live"] for item in catalog["universes"])
+    missing = client.post("/api/builder/universes/orb").get_json()
+    assert missing["ok"] is False
+    assert "gapfade" in missing["error"]

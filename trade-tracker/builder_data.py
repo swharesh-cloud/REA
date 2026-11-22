@@ -7,21 +7,32 @@ page and the tests can run with no keys. This module never places orders.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 
-from builder import CT, TF_MINUTES, attach_opening_context, needs_opening_context, normalize_bars, parse_symbols
+from builder import (
+    CT, SYMBOL_CAP, TF_MINUTES, app_root, attach_opening_context,
+    needs_opening_context, normalize_bars, parse_symbols,
+)
 
 DATA = "https://data.alpaca.markets"
 ALPACA_TF = {"5m": "5Min", "15m": "15Min", "1h": "1Hour", "4h": "1Hour", "1d": "1Day"}
 FIXTURE_START = "2026-10-05"
 FIXTURE_END = "2026-11-13"
 MAX_DAYS = 400
-MAX_SYMBOLS = 30
+MAX_SYMBOLS = SYMBOL_CAP
+BATCH = 40
 
 
-def fetch_bars(symbols, timeframe: str, start: str, end: str):
-    """Return ``({symbol: [alpaca bars]}, feed_name)``."""
+def fetch_bars(symbols, timeframe: str, start: str, end: str, progress=None):
+    """Return ``({symbol: [alpaca bars]}, feed_name)``.
+
+    ``progress(done, total, message)`` is optional. Real downloads are cached
+    under ``data/builder/cache`` and requested in batches of 40 symbols.
+    """
     symbols = parse_symbols(symbols if isinstance(symbols, str) else " ".join(symbols))
     if not symbols:
         raise ValueError("choose at least one symbol")
@@ -30,28 +41,30 @@ def fetch_bars(symbols, timeframe: str, start: str, end: str):
     if timeframe not in ALPACA_TF:
         raise ValueError("timeframe must be 5m, 15m, 1h, 4h, or daily")
     if os.environ.get("BUILDER_FIXTURE_BARS") == "1":
+        if progress:
+            progress(1, 1, "Fixture bars")
         return fixture_market(symbols, timeframe, start, end), "fixture"
     start_iso, end_iso = _window(start, end)
     headers = _headers()
     feed = "sip"
     try:
-        raw = _download(headers, symbols, ALPACA_TF[timeframe], start_iso, end_iso, "sip")
+        raw = _download(headers, symbols, timeframe, start_iso, end_iso, "sip", progress)
         if not any(raw.values()):
             raise RuntimeError("SIP returned no bars")
     except Exception:
         feed = "iex"
-        raw = _download(headers, symbols, ALPACA_TF[timeframe], start_iso, end_iso, "iex")
+        raw = _download(headers, symbols, timeframe, start_iso, end_iso, "iex", progress)
     if timeframe == "4h":
         raw = {sym: aggregate_4h(rows) for sym, rows in raw.items()}
     return raw, feed
 
 
-def load_bars(spec, symbols, start: str, end: str):
+def load_bars(spec, symbols, start: str, end: str, progress=None):
     """Bars for a strategy, plus 5-minute opening context when the rules need it."""
-    raw, feed = fetch_bars(symbols, spec.timeframe, start, end)
+    raw, feed = fetch_bars(symbols, spec.timeframe, start, end, progress=progress)
     notes = [f"Bars: {feed} feed, {spec.timeframe}."]
     if needs_opening_context(spec) and spec.timeframe not in ("5m",):
-        five, five_feed = fetch_bars(symbols, "5m", start, end)
+        five, five_feed = fetch_bars(symbols, "5m", start, end, progress=progress)
         for sym, rows in list(raw.items()):
             raw[sym] = attach_opening_context(rows, five.get(sym) or [])
         notes.append(f"Opening range and first-5-minute RVOL came from {five_feed} 5-minute bars.")
@@ -101,28 +114,71 @@ def _headers():
     return broker.headers
 
 
-def _download(headers, symbols, timeframe, start, end, feed):
+def cache_file(feed: str, timeframe: str, start: str, end: str, symbol: str):
+    digest = hashlib.sha1(f"{feed}|{timeframe}|{start}|{end}".encode()).hexdigest()[:12]
+    safe = re.sub(r"[^A-Z0-9._-]", "_", symbol.upper())
+    return app_root() / "data" / "builder" / "cache" / f"{safe}-{timeframe}-{digest}.json"
+
+
+def read_cache(feed, timeframe, start, end, symbol):
+    path = cache_file(feed, timeframe, start, end, symbol)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, list) else None
+
+
+def write_cache(feed, timeframe, start, end, symbol, rows):
+    path = cache_file(feed, timeframe, start, end, symbol)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(rows), encoding="utf-8")
+
+
+def _download(headers, symbols, timeframe, start, end, feed, progress=None):
     import requests
-    out = {sym: [] for sym in symbols}
-    for offset in range(0, len(symbols), 50):
-        chunk = symbols[offset:offset + 50]
+    alpaca_tf = ALPACA_TF[timeframe]
+    out = {}
+    missing = []
+    for symbol in symbols:
+        cached = read_cache(feed, timeframe, start, end, symbol)
+        if cached is not None:
+            out[symbol] = cached
+        else:
+            missing.append(symbol)
+    batches = max(1, (len(missing) + BATCH - 1) // BATCH) if missing else 1
+    done_batches = 0
+    if progress:
+        progress(len(out), len(symbols), f"Cache hit {len(out)}/{len(symbols)}" if out else "Downloading bars")
+    for offset in range(0, len(missing), BATCH):
+        chunk = missing[offset:offset + BATCH]
+        got = {sym: [] for sym in chunk}
         token = None
-        for _ in range(200):
+        for _ in range(400):
             params = {
-                "symbols": ",".join(chunk), "timeframe": timeframe, "start": start, "end": end,
+                "symbols": ",".join(chunk), "timeframe": alpaca_tf, "start": start, "end": end,
                 "limit": 10000, "feed": feed, "adjustment": "split",
             }
             if token:
                 params["page_token"] = token
-            response = requests.get(DATA + "/v2/stocks/bars", headers=headers, params=params, timeout=30)
+            response = requests.get(DATA + "/v2/stocks/bars", headers=headers, params=params, timeout=45)
             if response.status_code >= 400:
                 raise RuntimeError(f"Alpaca bars HTTP {response.status_code}: {response.text[:180]}")
             body = response.json()
             for sym, rows in (body.get("bars") or {}).items():
-                out.setdefault(sym, []).extend(rows)
+                got.setdefault(sym, []).extend(rows)
             token = body.get("next_page_token")
             if not token:
                 break
+        for sym, rows in got.items():
+            write_cache(feed, timeframe, start, end, sym, rows)
+            out[sym] = rows
+        done_batches += 1
+        if progress:
+            progress(min(len(symbols), len(out)), len(symbols),
+                     f"Bars {min(len(symbols), offset + len(chunk))}/{len(symbols)} · batch {done_batches}/{batches}")
+    for symbol in symbols:
+        out.setdefault(symbol, [])
     return out
 
 

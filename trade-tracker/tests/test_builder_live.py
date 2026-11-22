@@ -172,6 +172,16 @@ def test_fixture_orb_backtest_has_wins_and_losses(monkeypatch):
     assert result["equity"][-1]["equity"] == result["stats"]["final_equity"]
 
 
+def test_bar_cache_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setenv("BUILDER_ROOT", str(tmp_path))
+    rows = [{"t": "2026-10-05T14:30:00Z", "o": 1, "h": 2, "l": 0.5, "c": 1.5, "v": 10}]
+    builder_data.write_cache("iex", "5m", "start", "end", "SPY", rows)
+    assert builder_data.read_cache("iex", "5m", "start", "end", "SPY") == rows
+    monkeypatch.setenv("BUILDER_FIXTURE_BARS", "1")
+    raw, feed = builder_data.fetch_bars([f"S{i:03d}" for i in range(31)], "1d", "2026-10-05", "2026-10-09")
+    assert feed == "fixture" and len(raw) == 31
+
+
 def test_four_hour_aggregation_keeps_a_full_block():
     rows = []
     for hour, close in ((8, 10), (9, 11), (10, 12), (11, 13)):
