@@ -10,6 +10,7 @@ import uuid
 from collections import deque
 
 from .market import INTERVALS, interval_ms
+from .notify import Notifier
 from .strategies import STRATEGIES, fp, make_strategy
 
 MIN_ORDER_USD = 10.0     # Hyperliquid's minimum order value
@@ -313,7 +314,11 @@ class Engine:
         self._thread = None
         self.started_at = time.time()
         self.heartbeat = time.time()
+        self.notifier = Notifier()
+        self._save_lock = threading.Lock()
         self._load()
+        self.notifier.url = os.environ.get("LT_NOTIFY_URL") or self.settings.get("notify_url", "")
+        self.notifier.min_level = self.settings.get("notify_level", "trade")
 
     # ---- persistence ----
     @property
@@ -337,16 +342,27 @@ class Engine:
                 self.event(f"Could not load bot {cfg.get('name')}: {e}")
 
     def save(self):
-        with self.lock:
-            data = {"risk": self.risk, "settings": self.settings, "kill_switch": self.kill_switch,
-                    "bots": [b.to_config() for b in self.bots.values()]}
-        tmp = self._path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(data, f)
-        os.replace(tmp, self._path)
+        """Atomic, durable write (fsync + rename) so a crash or power cut never corrupts bots.json."""
+        with self._save_lock:
+            with self.lock:
+                data = {"risk": self.risk, "settings": self.settings, "kill_switch": self.kill_switch,
+                        "bots": [b.to_config() for b in self.bots.values()]}
+            tmp = self._path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self._path)
 
     def event(self, msg, level="info"):
-        self.events.append({"t": int(time.time() * 1000), "msg": msg, "level": level})
+        self.events.append({"t": int(time.time() * 1000), "msg": msg,
+                            "level": "info" if level in ("trade", "paper") else level})
+        self.notifier.send(msg, level)
+
+    def set_notify(self, url: str, min_level: str = "trade"):
+        self.settings["notify_url"], self.settings["notify_level"] = url, min_level
+        self.notifier.url = os.environ.get("LT_NOTIFY_URL") or url
+        self.notifier.min_level = min_level
 
     # ---- lifecycle ----
     def set_market(self, market, client=None):
@@ -424,11 +440,20 @@ class Engine:
                 bot.error = ""
                 for tr in ctx.fills:
                     self.event(f"[{bot.name}] {tr['side'].upper()} {bot.symbol} ${tr['usd']:.2f} @ {fp(tr['price'])}"
-                               + (" (LIVE)" if bot.mode == "live" else ""))
+                               + (f" — {tr['reason']}" if tr.get("reason") else "")
+                               + (" (LIVE)" if bot.mode == "live" else ""),
+                               "trade" if bot.mode == "live" else "paper")
+                if bot.state.pop("_err_notified", False):
+                    self.event(f"{bot.name}: recovered", "info")
+                if ctx.fills:
+                    self.save()  # persist every fill at once: a crash must never lose a position
                 if halted:
                     self._stop_bot(bot, "halted by max drawdown")
             except Exception as e:
                 bot.error = str(e)
+                if not bot.state.get("_err_notified"):
+                    bot.state["_err_notified"] = True
+                    self.event(f"{bot.name}: error — {e}", "warn")
                 bot.log(f"error: {e}")
                 status = getattr(e, "status", None)
                 transient = status is None or status == 429 or status >= 500  # network blips, outages
@@ -478,7 +503,8 @@ class Engine:
         bot.resume = False
         bot.status = "stopped"
         bot.log(why)
-        self.event(f"{bot.name}: {why}", "warn" if "halt" in why or "error" in why else "info")
+        bad = any(k in why for k in ("halt", "error", "after", "kill"))
+        self.event(f"{bot.name}: {why}", "warn" if bad else "info")
 
     def stop_bot(self, bot_id):
         self._stop_bot(self.bots[bot_id])

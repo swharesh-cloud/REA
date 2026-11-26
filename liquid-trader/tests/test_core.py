@@ -247,6 +247,58 @@ class ServerTest(unittest.TestCase):
         self.call("POST", "close_position", {"symbol": "ETH-PERP"})
 
 
+class DurabilityTest(unittest.TestCase):
+    def test_fill_is_persisted_immediately(self):
+        """A crash right after a fill must not lose the bot's position (live bots depend on it)."""
+        from liquid_trader.engine import Engine
+        d = tempfile.mkdtemp()
+        eng = Engine(d)
+        eng.set_market(SimMarket(seed=3, history=500, seconds_per_bar=0.01))
+        bot = eng.create_bot({"strategy": "dca", "symbol": "BTC-PERP", "interval": "1m", "budget": 500,
+                              "params": {"amount": 20}})
+        eng.start_bot(bot.id)
+        eng._tick(bot)  # first closed bar -> DCA buys
+        self.assertTrue(bot.trades)
+        # read the file as a freshly restarted engine would - no shutdown/save in between
+        e2 = Engine(d)
+        self.assertAlmostEqual(e2.bots[bot.id].book.size, bot.book.size)
+        self.assertEqual(len(e2.bots[bot.id].trades), len(bot.trades))
+        self.assertTrue(e2.bots[bot.id].resume)
+        shutil.rmtree(d, ignore_errors=True)
+
+
+class NotifyTest(unittest.TestCase):
+    def test_request_formats(self):
+        from liquid_trader.notify import build_request, Notifier
+        r = build_request("https://ntfy.sh/topic", "hello", "error")
+        self.assertEqual(r.data, b"hello")
+        self.assertEqual(r.get_header("Priority"), "5")
+        r = build_request("https://discord.com/api/webhooks/1/x", "hi", "info")
+        self.assertIn("content", json.loads(r.data))
+        r = build_request("https://hooks.slack.com/services/x", "hi", "warn")
+        self.assertIn("text", json.loads(r.data))
+        n = Notifier("", "trade")
+        n.send("ignored")  # no URL: must be a no-op
+        self.assertTrue(n.q.empty())
+        n.url = "https://example.invalid/x"
+        n.min_level = "warn"
+        n.send("paper fill", "paper")
+        n.send("info msg", "info")
+        self.assertTrue(n.q.empty())  # below threshold
+
+
+class WatchdogTest(unittest.TestCase):
+    def test_stalled_engine_exits_for_restart(self):
+        code = ("import sys, time, types; sys.path.insert(0, %r)\n"
+                "from liquid_trader import __main__ as m\n"
+                "eng = types.SimpleNamespace(heartbeat=time.time() - 999, _stop=types.SimpleNamespace(is_set=lambda: False), save=lambda: None)\n"
+                "m.time.sleep = lambda s: None\n"
+                "m.watchdog(types.SimpleNamespace(engine=eng), limit=1)\n") % os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertIn("WATCHDOG", r.stdout)
+
+
 class LockTest(unittest.TestCase):
     def test_single_instance_lock(self):
         from liquid_trader import service

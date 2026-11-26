@@ -62,27 +62,66 @@ Only one engine can trade at a time. A lock file ensures that, so a second copy 
 
 From Terminal: `python3 -m liquid_trader --install-service` / `--uninstall-service`. Logs: `~/Library/Logs/LiquidTrader.log`. If you move the app after turning the service on, turn it off and on again.
 
-> **The Mac has to stay on and online.** The service stops *idle* sleep, but closing a laptop lid still sleeps the Mac unless it's on power with an external display. For guaranteed uptime, run the engine on a small always-on Linux server or VPS:
->
-> ```ini
-> # /etc/systemd/system/liquid-trader.service
-> [Unit]
-> Description=Liquid Trader engine
-> After=network-online.target
->
-> [Service]
-> User=trader
-> WorkingDirectory=/opt/REA/liquid-trader
-> ExecStart=/usr/bin/python3 -m liquid_trader --headless --port 8765
-> Environment=LIQUID_API_KEY=... LIQUID_API_SECRET=...
-> Restart=always
-> RestartSec=5
->
-> [Install]
-> WantedBy=multi-user.target
-> ```
->
-> The server only listens on `127.0.0.1`. Reach the dashboard from your Mac with an SSH tunnel: `ssh -L 8765:127.0.0.1:8765 you@server`, then open http://127.0.0.1:8765.
+> **The Mac has to stay on and online.** For trading that's truly 24/7, run the engine on a cloud server instead (next section).
+
+## Run it on a cloud server (truly 24/7)
+
+The engine runs on a small Linux server, and your Mac just views the dashboard. Trading continues while your Mac is off, asleep or travelling.
+
+**1. Rent a small Linux server.** Choose **Ubuntu 24.04**, the smallest size (1 vCPU / 1 GB RAM is plenty), and add your SSH key when you create it. Any of these work:
+
+| Provider | Plan | Approx. price |
+|---|---|---|
+| Hetzner Cloud | CX22 | ~€4/month |
+| DigitalOcean | Basic Droplet | $6/month |
+| AWS Lightsail | 1 GB | $5/month |
+| Vultr / Linode | 1 GB | $5/month |
+
+Pick a region where you're allowed to use Liquid. A region close to the exchange keeps latency low.
+
+**2. Deploy from your Mac** (one command; re-run it any time to update):
+
+```bash
+cd REA/liquid-trader
+./deploy/deploy.sh root@YOUR_SERVER_IP                  # or ubuntu@... on AWS/Lightsail
+./deploy/deploy.sh root@YOUR_SERVER_IP --migrate-bots   # also move your bots from this Mac
+```
+
+The script copies the app and asks for your Liquid API key and secret, which are stored root-only (0600) on the server and sent over SSH, never on a command line. It also asks for an optional phone-alert URL. Then it installs a hardened `systemd` service that:
+
+- starts on boot, and restarts within 5 seconds after any crash (`Restart=always`),
+- runs as an unprivileged `liquidtrader` user that can only write its own data folder,
+- writes each fill to disk atomically the moment it happens, so a crash or power cut can't lose a position,
+- resumes all running bots after a restart or reboot, and keeps reconnecting to Liquid after outages,
+- exits and gets restarted by a watchdog if the engine loop ever hangs for 2 minutes.
+
+**3. Open the dashboard:**
+
+```bash
+./deploy/dashboard.sh root@YOUR_SERVER_IP
+```
+
+The dashboard is **never exposed to the internet**. It only listens on the server's localhost and reaches your Mac through an encrypted SSH tunnel. Close the window and the server keeps trading.
+
+**4. Turn on phone alerts.** Install the free **ntfy** app, subscribe to a long random topic name, and paste `https://ntfy.sh/<topic>` into **Settings → Phone alerts** (or enter it during deploy). You'll get a push for every live trade, warning and error, or only errors if you prefer. Discord and Slack webhooks also work.
+
+Handy commands:
+
+```bash
+ssh root@YOUR_SERVER_IP 'journalctl -u liquid-trader -f'          # live logs
+ssh root@YOUR_SERVER_IP 'systemctl restart liquid-trader'         # restart
+ssh root@YOUR_SERVER_IP 'systemctl stop liquid-trader'            # stop trading
+```
+
+> Run each bot in **one** place only. If the same live bot runs on your Mac and on the server, it trades twice. `--migrate-bots` offers to turn off the Mac's background service for you.
+
+### Alternative: Docker
+
+```bash
+cp .env.example .env        # add LIQUID_API_KEY / LIQUID_API_SECRET / LT_NOTIFY_URL
+docker compose up -d        # restart: unless-stopped, data in a named volume
+ssh -N -L 18765:127.0.0.1:8765 you@server   # then open http://127.0.0.1:18765
+```
 
 ## How it works
 
@@ -95,7 +134,13 @@ liquid_trader/
   server.py       Local JSON API + dashboard (127.0.0.1 only, per-launch token, Host check)
   service.py      Single-instance lock and the macOS launchd service
   credentials.py  Keychain / env var / 0600 file storage for API keys
+  notify.py       Phone/Discord/Slack alerts
   static/         Dashboard UI and a dependency-free canvas charting library
+deploy/
+  deploy.sh       One-command install/update on your own Linux server (from your Mac)
+  server_setup.sh Hardened systemd service (run by deploy.sh on the server)
+  dashboard.sh    Opens the remote dashboard through an SSH tunnel
+Dockerfile, docker-compose.yml   Docker alternative
 ```
 
 - **No third-party dependencies.** The engine is pure Python standard library. `pywebview` is optional and only provides the native window.
@@ -130,7 +175,7 @@ Register it in `STRATEGIES` at the bottom of `strategies.py`. It shows up automa
 python3 -m unittest discover -s tests -v
 ```
 
-The tests cover request signing (checked byte-for-byte against the JavaScript reference client when `node` is available), indicators, position accounting, every strategy, risk clamps, the HTTP API with its auth checks, bot auto-resume, the kill switch, and the single-instance lock.
+The tests cover request signing (checked byte-for-byte against the JavaScript reference client when `node` is available), indicators, position accounting, every strategy, risk clamps, the HTTP API with its auth checks, bot auto-resume, crash durability (fills persisted immediately), the hang watchdog, alerts, the kill switch, and the single-instance lock. The cloud deploy (`deploy.sh` → systemd) was tested end to end against an Ubuntu 24.04 server: install, update, `kill -9` recovery and a full reboot.
 
 ## Important notes
 

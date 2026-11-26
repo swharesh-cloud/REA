@@ -33,6 +33,20 @@ def open_ui(url, browser_only=False):
     return False
 
 
+def watchdog(app, limit=120):
+    """If the engine loop ever hangs, exit so launchd/systemd/Docker restart us cleanly."""
+    import os
+    while True:
+        time.sleep(15)
+        age = time.time() - app.engine.heartbeat
+        if age > limit and not app.engine._stop.is_set():
+            print(f"WATCHDOG: engine loop stalled for {age:.0f}s - exiting for restart", flush=True)
+            try:
+                app.engine.save()
+            finally:
+                os._exit(3)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="liquid-trader")
     ap.add_argument("--port", type=int, default=service.DEFAULT_PORT, help="local port (default 8765)")
@@ -40,6 +54,11 @@ def main(argv=None):
     ap.add_argument("--headless", action="store_true", help="run only the engine and server (24/7 service mode)")
     ap.add_argument("--sim-speed", type=float, default=1.0,
                     help="real seconds per simulated 1-minute candle (default 1.0)")
+    ap.add_argument("--bind", default="127.0.0.1",
+                    help="address to listen on (default 127.0.0.1; use 0.0.0.0 only inside Docker)")
+    ap.add_argument("--connect", metavar="URL",
+                    help="open a window on an engine that's already running elsewhere, e.g. through an SSH "
+                         "tunnel: --connect http://127.0.0.1:18765")
     ap.add_argument("--install-service", action="store_true", help="install the macOS 24/7 background service")
     ap.add_argument("--uninstall-service", action="store_true", help="remove the macOS background service")
     args = ap.parse_args(argv)
@@ -48,6 +67,11 @@ def main(argv=None):
         print(service.install_service(args.port)); return
     if args.uninstall_service:
         print(service.uninstall_service()); return
+    if args.connect:
+        open_ui(args.connect.rstrip("/") + "/", args.browser)
+        if args.browser:
+            time.sleep(1)
+        return
 
     data_dir = credentials.data_dir()
     if not service.acquire_lock(data_dir):
@@ -68,7 +92,7 @@ def main(argv=None):
     httpd = None
     for attempt in range(20):  # the previous owner may still be releasing the port
         try:
-            httpd = serve(app, args.port)
+            httpd = serve(app, args.port, args.bind)
             break
         except OSError:
             if not args.headless and attempt >= 2:
@@ -93,6 +117,8 @@ def main(argv=None):
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, shutdown)
+    if args.headless:
+        threading.Thread(target=watchdog, args=(app,), daemon=True, name="watchdog").start()
 
     if not args.headless:
         if open_ui(url, args.browser):

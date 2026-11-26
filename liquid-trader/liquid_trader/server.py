@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import secrets
 import threading
 import time
@@ -108,6 +109,11 @@ class App:
                 "uptime_s": time.time() - self.engine.started_at,
                 "heartbeat_age_s": time.time() - self.engine.heartbeat,
                 "service": service.service_status(), "headless": self.headless,
+                "platform": platform.system(), "notify": {
+                    "configured": bool(self.engine.notifier.url),
+                    "from_env": bool(os.environ.get("LT_NOTIFY_URL")),
+                    "target": _mask_url(self.engine.notifier.url), "level": self.engine.notifier.min_level,
+                    "last_error": self.engine.notifier.last_error},
                 "market_time": m.now_ms(), "data_dir": self.data_dir}
 
     # ---- account view ----
@@ -170,6 +176,14 @@ class App:
                 self.manual_trades.append({"t": self.market.now_ms(), "symbol": sym, "side": side,
                                            "price": fill["price"], "usd": abs(fill["coin"]) * p, "pnl": pnl})
         return {"ok": True}
+
+
+def _mask_url(url):
+    if not url:
+        return ""
+    p = urllib.parse.urlparse(url)
+    tail = p.path.rstrip("/").rsplit("/", 1)[-1]
+    return f"{p.scheme}://{p.netloc}/…{tail[-4:]}" if tail else f"{p.scheme}://{p.netloc}"
 
 
 def _opt(v):
@@ -366,6 +380,7 @@ def route(app: App, method, path, qs, body):
             else:
                 raise ValueError("source must be simulated or liquid")
             eng.event(f"Data source → {src}")
+            eng.save()
             return app.status()
         if parts == ["order"]:
             return app.manual_order(body)
@@ -385,6 +400,19 @@ def route(app: App, method, path, qs, body):
             return {"service": st, "handoff": not app.headless, "port": service.DEFAULT_PORT}
         if parts == ["service", "uninstall"]:
             return {"service": service.uninstall_service()}
+        if parts == ["notify"]:
+            url = (body.get("url") or "").strip()
+            if url and not url.startswith("https://"):
+                raise ValueError("Notification URL must start with https://")
+            level = body.get("level", "trade")
+            if level not in ("trade", "info", "warn", "error"):
+                raise ValueError("bad level")
+            if body.get("test"):
+                eng.notifier.send("Test notification — alerts are working ✅", "error")
+                return app.status()
+            eng.set_notify(url if "url" in body else eng.settings.get("notify_url", ""), level)
+            eng.save()
+            return app.status()
         if parts == ["risk"]:
             for k in ("max_order_usd", "max_total_live_usd"):
                 if k in body:
@@ -411,8 +439,8 @@ def route(app: App, method, path, qs, body):
     raise KeyError(path)
 
 
-def serve(app: App, port: int = 0):
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(app))
+def serve(app: App, port: int = 0, host: str = "127.0.0.1"):
+    httpd = ThreadingHTTPServer((host, port), make_handler(app))
     httpd.daemon_threads = True
     t = threading.Thread(target=httpd.serve_forever, daemon=True, name="http")
     t.start()

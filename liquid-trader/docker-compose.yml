@@ -1,0 +1,14 @@
+# docker compose up -d     then open the dashboard through an SSH tunnel:
+#   ssh -N -L 18765:127.0.0.1:8765 you@server   →   http://127.0.0.1:18765
+services:
+  liquid-trader:
+    build: .
+    container_name: liquid-trader
+    restart: unless-stopped          # restarts after crashes and server reboots
+    env_file: .env                   # LIQUID_API_KEY=..., LIQUID_API_SECRET=..., LT_NOTIFY_URL=... (optional)
+    volumes:
+      - liquid-trader-data:/data     # bots, history and settings survive updates
+    ports:
+      - "127.0.0.1:8765:8765"        # localhost only - never exposed to the internet
+volumes:
+  liquid-trader-data:

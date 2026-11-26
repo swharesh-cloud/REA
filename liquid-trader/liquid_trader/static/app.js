@@ -706,7 +706,9 @@ async function renderSettings() {
   </div></div>
 
   <div class="panel"><div class="panel-h">24/7 trading <span class="r">${st.headless ? '<span class="tag running">background service</span>' : svc.running ? '<span class="tag running">service running</span>' : '<span class="tag">in-app only</span>'}</span></div><div class="panel-b">
-    ${st.headless
+    ${st.headless && st.platform !== "Darwin"
+      ? `<p style="margin-top:0">This engine is running on a <b>server</b> under systemd. It trades 24/7 whether or not your Mac is on, restarts automatically after crashes and reboots, and resumes your bots.</p>`
+      : st.headless
       ? `<p style="margin-top:0">This engine is running as a <b>background service</b>. It keeps trading when this window is closed, starts at login, restarts if it crashes, and keeps your Mac from idle-sleeping.</p>`
       : `<p style="margin-top:0">Right now the engine runs inside this window, so <b>closing the window stops your bots</b>. Turn on the background service to keep trading 24/7.</p>`}
     <div class="kv"><span>Engine uptime</span><span>${dur(st.uptime_s)}</span></div>
@@ -714,8 +716,18 @@ async function renderSettings() {
     <div class="kv"><span>Auto-resume bots after restart</span><span>on</span></div>
     <div class="kv"><span>Auto-reconnect to Liquid</span><span>on</span></div>
     ${svc.log ? `<div class="kv"><span>Log file</span><span style="font-size:11px">${esc(svc.log)}</span></div>` : ""}
-    <div style="display:flex;gap:8px;margin-top:10px">${svc.supported ? (svc.installed ? '<button class="btn danger" id="s-svc-off">Turn off 24/7 service</button>' : '<button class="btn primary" id="s-svc-on">Turn on 24/7 service</button>') : '<span class="note">The launchd service is macOS-only. On a Linux server, run with <code>--headless</code> under systemd (see README).</span>'}</div>
-    <div class="note" style="margin-top:10px">Your Mac must stay powered on and online. The service prevents <i>idle</i> sleep, but closing a laptop lid still sleeps it unless it's on power with an external display. For true always-on trading, run the headless engine on a small cloud server.</div>
+    <div style="display:flex;gap:8px;margin-top:10px">${st.headless && st.platform !== "Darwin" ? "" : svc.supported ? (svc.installed ? '<button class="btn danger" id="s-svc-off">Turn off 24/7 service</button>' : '<button class="btn primary" id="s-svc-on">Turn on 24/7 service</button>') : '<span class="note">The launchd service is macOS-only. On a Linux server, run with <code>--headless</code> under systemd (see README).</span>'}</div>
+    ${st.headless && st.platform !== "Darwin" ? "" : `<div class="note" style="margin-top:10px">Your Mac must stay powered on and online. The service prevents <i>idle</i> sleep, but closing a laptop lid still sleeps it unless it's on power with an external display. For true always-on trading, deploy to a small cloud server with <code>./deploy/deploy.sh</code> (see README).</div>`}
+  </div></div>
+
+  <div class="panel"><div class="panel-h">Phone alerts <span class="r">${st.notify.configured ? '<span class="tag running">on</span>' : '<span class="tag">off</span>'}</span></div><div class="panel-b">
+    <p class="muted" style="margin-top:0">Get a push notification for live trades, warnings and errors — essential when the engine runs on a server. Easiest: install the free <b>ntfy</b> app, subscribe to a hard-to-guess topic, and paste <code>https://ntfy.sh/&lt;topic&gt;</code>. Discord and Slack webhooks work too.</p>
+    ${st.notify.from_env ? `<div class="note" style="margin-bottom:10px">Set on the server via <code>LT_NOTIFY_URL</code> (${esc(st.notify.target)}).</div>` : `
+    <div class="field"><label>Webhook URL ${st.notify.target ? `<span class="dim">current: ${esc(st.notify.target)}</span>` : ""}</label><input class="input" id="s-nurl" placeholder="https://ntfy.sh/my-secret-topic-123" autocomplete="off"></div>`}
+    <div class="field"><label>Send</label><select class="input" id="s-nlevel">
+      ${[["trade", "Live trades + warnings + errors"], ["warn", "Warnings + errors"], ["error", "Errors only"]].map(([v, l]) => `<option value="${v}" ${st.notify.level === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+    ${st.notify.last_error ? `<div class="note warn" style="margin-bottom:10px">Last send failed: ${esc(st.notify.last_error)}</div>` : ""}
+    <div style="display:flex;gap:8px"><button class="btn" id="s-nsave">Save</button><button class="btn" id="s-ntest" ${st.notify.configured ? "" : "disabled"}>Send test</button>${st.notify.configured && !st.notify.from_env ? '<button class="btn danger" id="s-noff">Turn off</button>' : ""}</div>
   </div></div>
 
   <div class="panel"><div class="panel-h">Risk limits</div><div class="panel-b">
@@ -740,6 +752,9 @@ async function renderSettings() {
   if ($("#s-del")) $("#s-del").onclick = async () => { if (!(await confirmBox("Remove API key?", "<p>The app switches back to the simulated market.</p>"))) return; await guard(() => DEL("credentials")); boot(); };
   $("#s-src").onclick = async (e) => { const b = e.target.closest("button"); if (!b) return; await guard(() => POST("source", { source: b.dataset.s })); boot(); };
   $("#s-risk").onclick = async () => { await guard(() => POST("risk", { max_order_usd: +$("#s-maxord").value, max_total_live_usd: +$("#s-maxlive").value })); toast("Risk limits saved", "ok"); };
+  $("#s-nsave").onclick = async () => { const u = $("#s-nurl"); const body = { level: $("#s-nlevel").value }; if (u && u.value.trim()) body.url = u.value.trim(); await guard(() => POST("notify", body)); toast("Alert settings saved", "ok"); renderSettings(); };
+  $("#s-ntest").onclick = async () => { await guard(() => POST("notify", { test: true })); toast("Test alert sent — check your phone", "ok"); setTimeout(renderSettings, 3000); };
+  if ($("#s-noff")) $("#s-noff").onclick = async () => { await guard(() => POST("notify", { url: "", level: $("#s-nlevel").value })); renderSettings(); };
   if ($("#s-kreset")) $("#s-kreset").onclick = async () => { await guard(() => POST("killswitch/reset")); renderSettings(); };
   if ($("#s-svc-on")) $("#s-svc-on").onclick = async () => {
     if (!(await confirmBox("Turn on 24/7 trading", "<p>Liquid Trader will install a background service (launchd) that runs the engine all the time: it starts at login, restarts automatically, and prevents idle sleep.</p><p class='muted'>This window will reconnect to the service in a few seconds.</p>"))) return;

@@ -24,7 +24,7 @@ def plist_path():
 def log_path():
     if IS_MAC:
         return os.path.expanduser("~/Library/Logs/LiquidTrader.log")
-    return os.path.expanduser("~/.liquid-trader/engine.log")
+    return "sudo journalctl -u liquid-trader -f   (systemd) / docker logs liquid-trader"
 
 
 # ---- single instance -----------------------------------------------------
