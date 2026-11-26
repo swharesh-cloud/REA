@@ -59,10 +59,20 @@ def main(argv=None):
     ap.add_argument("--connect", metavar="URL",
                     help="open a window on an engine that's already running elsewhere, e.g. through an SSH "
                          "tunnel: --connect http://127.0.0.1:18765")
+    ap.add_argument("--print-daemon-plist", nargs=2, metavar=("USER", "HOME"),
+                    help=argparse.SUPPRESS)  # used by mac_server_setup.sh --at-boot
+    ap.add_argument("--export-credentials", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--install-service", action="store_true", help="install the macOS 24/7 background service")
     ap.add_argument("--uninstall-service", action="store_true", help="remove the macOS background service")
     args = ap.parse_args(argv)
 
+    if args.print_daemon_plist:
+        import plistlib
+        sys.stdout.buffer.write(plistlib.dumps(service.daemon_plist(*args.print_daemon_plist, port=args.port)))
+        return
+    if args.export_credentials:
+        print("exported" if credentials.export_to_file() else "none")
+        return
     if args.install_service:
         print(service.install_service(args.port)); return
     if args.uninstall_service:

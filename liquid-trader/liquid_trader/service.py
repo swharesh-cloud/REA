@@ -89,17 +89,45 @@ def service_plist(python=None, workdir=None, port=DEFAULT_PORT) -> dict:
     }
 
 
+DAEMON_PLIST = f"/Library/LaunchDaemons/{LABEL}.plist"
+
+
+def daemon_plist(user: str, home: str, python=None, workdir=None, port=DEFAULT_PORT) -> dict:
+    """Boot-level service: starts when the Mac powers on, before anyone logs in (Mac-as-server mode).
+    Runs as your user (not root). The login Keychain isn't available before login, so the API key
+    is read from a private 0600 file instead (LT_CREDENTIAL_STORE=file)."""
+    p = service_plist(python, workdir, port)
+    logs = os.path.join(home, "Library/Logs/LiquidTrader.log")
+    p.update({
+        "UserName": user,
+        "GroupName": "staff",
+        "StandardOutPath": logs,
+        "StandardErrorPath": logs,
+        "EnvironmentVariables": {"PYTHONUNBUFFERED": "1", "HOME": home, "USER": user,
+                                 "LT_CREDENTIAL_STORE": "file"},
+    })
+    p.pop("ProcessType", None)
+    return p
+
+
 def service_status() -> dict:
-    installed = os.path.exists(plist_path())
+    agent = os.path.exists(plist_path())
+    daemon = os.path.exists(DAEMON_PLIST)
     running = False
-    if IS_MAC and installed:
+    if IS_MAC and agent:
         r = subprocess.run(["launchctl", "list", LABEL], capture_output=True, text=True)
         running = r.returncode == 0 and '"PID"' in r.stdout
-    return {"supported": IS_MAC, "installed": installed, "running": running, "plist": plist_path(),
-            "log": log_path(), "pid": os.getpid()}
+    if daemon and os.environ.get("LT_CREDENTIAL_STORE") == "file":
+        running = True  # we are the boot-level daemon
+    return {"supported": IS_MAC, "installed": agent or daemon, "running": running,
+            "mode": "boot" if daemon else "login" if agent else None,
+            "plist": DAEMON_PLIST if daemon else plist_path(), "log": log_path(), "pid": os.getpid()}
 
 
 def install_service(port=DEFAULT_PORT) -> dict:
+    if os.path.exists(DAEMON_PLIST):
+        raise RuntimeError("The boot-level server service is installed (mac_server_setup.sh --at-boot). "
+                           "Manage it with mac_server_setup.sh.")
     if not IS_MAC:
         raise RuntimeError("The background service uses macOS launchd. On Linux, use the systemd unit in "
                            "the README instead.")
@@ -115,6 +143,8 @@ def install_service(port=DEFAULT_PORT) -> dict:
 
 
 def uninstall_service() -> dict:
+    if os.path.exists(DAEMON_PLIST):
+        raise RuntimeError("The boot-level service needs admin rights to remove: run ./mac_server_setup.sh --undo")
     if IS_MAC and os.path.exists(plist_path()):
         subprocess.run(["launchctl", "unload", "-w", plist_path()], capture_output=True)
         os.remove(plist_path())

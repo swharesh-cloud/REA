@@ -313,6 +313,31 @@ class LockTest(unittest.TestCase):
         self.assertEqual(out, "True")
         shutil.rmtree(d, ignore_errors=True)
 
+    def test_boot_daemon_plist(self):
+        from liquid_trader import service
+        p = service.daemon_plist("alex", "/Users/alex", python="/venv/bin/python", workdir="/App/Resources")
+        self.assertEqual(p["UserName"], "alex")  # runs as the user, never as root
+        self.assertTrue(p["KeepAlive"] and p["RunAtLoad"])
+        self.assertEqual(p["EnvironmentVariables"]["HOME"], "/Users/alex")
+        self.assertEqual(p["EnvironmentVariables"]["LT_CREDENTIAL_STORE"], "file")
+        self.assertTrue(p["StandardOutPath"].startswith("/Users/alex/Library/Logs/"))
+
+    def test_file_credentials_for_boot_mode(self):
+        from liquid_trader import credentials
+        old = os.environ.get("HOME")
+        os.environ["HOME"] = tempfile.mkdtemp()
+        os.environ["LT_CREDENTIAL_STORE"] = "file"
+        try:
+            self.assertEqual(credentials.save("lq_k", "sk_s"), "file")
+            self.assertEqual(credentials.load(), ("lq_k", "sk_s", "file"))
+            mode = os.stat(os.path.join(credentials.data_dir(), "credentials.json")).st_mode & 0o777
+            self.assertEqual(mode, 0o600)
+            self.assertTrue(credentials.export_to_file())
+        finally:
+            os.environ.pop("LT_CREDENTIAL_STORE", None)
+            shutil.rmtree(os.environ["HOME"], ignore_errors=True)
+            os.environ["HOME"] = old
+
     def test_launchd_plist(self):
         from liquid_trader import service
         p = service.service_plist(python="/usr/bin/python3", workdir="/x")

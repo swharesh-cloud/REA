@@ -706,7 +706,9 @@ async function renderSettings() {
   </div></div>
 
   <div class="panel"><div class="panel-h">24/7 trading <span class="r">${st.headless ? '<span class="tag running">background service</span>' : svc.running ? '<span class="tag running">service running</span>' : '<span class="tag">in-app only</span>'}</span></div><div class="panel-b">
-    ${st.headless && st.platform !== "Darwin"
+    ${svc.mode === "boot"
+      ? `<p style="margin-top:0">This Mac is set up as a <b>server</b>. The engine starts at power-on (before anyone logs in), restarts automatically after crashes, power cuts and macOS updates, and resumes your bots. Closing this window doesn't stop trading.</p>`
+      : st.headless && st.platform !== "Darwin"
       ? `<p style="margin-top:0">This engine is running on a <b>server</b> under systemd. It trades 24/7 whether or not your Mac is on, restarts automatically after crashes and reboots, and resumes your bots.</p>`
       : st.headless
       ? `<p style="margin-top:0">This engine is running as a <b>background service</b>. It keeps trading when this window is closed, starts at login, restarts if it crashes, and keeps your Mac from idle-sleeping.</p>`
@@ -716,8 +718,8 @@ async function renderSettings() {
     <div class="kv"><span>Auto-resume bots after restart</span><span>on</span></div>
     <div class="kv"><span>Auto-reconnect to Liquid</span><span>on</span></div>
     ${svc.log ? `<div class="kv"><span>Log file</span><span style="font-size:11px">${esc(svc.log)}</span></div>` : ""}
-    <div style="display:flex;gap:8px;margin-top:10px">${st.headless && st.platform !== "Darwin" ? "" : svc.supported ? (svc.installed ? '<button class="btn danger" id="s-svc-off">Turn off 24/7 service</button>' : '<button class="btn primary" id="s-svc-on">Turn on 24/7 service</button>') : '<span class="note">The launchd service is macOS-only. On a Linux server, run with <code>--headless</code> under systemd (see README).</span>'}</div>
-    ${st.headless && st.platform !== "Darwin" ? "" : `<div class="note" style="margin-top:10px">Your Mac must stay powered on and online. The service prevents <i>idle</i> sleep, but closing a laptop lid still sleeps it unless it's on power with an external display. For true always-on trading, deploy to a small cloud server with <code>./deploy/deploy.sh</code> (see README).</div>`}
+    <div style="display:flex;gap:8px;margin-top:10px">${svc.mode === "boot" ? '<span class="note">Manage with <code>./mac_server_setup.sh --status</code> / <code>--undo</code></span>' : st.headless && st.platform !== "Darwin" ? "" : svc.supported ? (svc.installed ? '<button class="btn danger" id="s-svc-off">Turn off 24/7 service</button>' : '<button class="btn primary" id="s-svc-on">Turn on 24/7 service</button>') : '<span class="note">The launchd service is macOS-only. On a Linux server, run with <code>--headless</code> under systemd (see README).</span>'}</div>
+    ${(st.headless && st.platform !== "Darwin") || svc.mode === "boot" ? "" : `<div class="note" style="margin-top:10px">Your Mac must stay powered on and online. To use it as a real server (never sleeps on power, survives power cuts and updates), run <code>./mac_server_setup.sh --at-boot</code>.  Or deploy to a cloud server with <code>./deploy/deploy.sh</code>.</div>`}
   </div></div>
 
   <div class="panel"><div class="panel-h">Phone alerts <span class="r">${st.notify.configured ? '<span class="tag running">on</span>' : '<span class="tag">off</span>'}</span></div><div class="panel-b">

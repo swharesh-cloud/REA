@@ -91,8 +91,9 @@ codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
 
 echo "Built: $APP"
 if [[ "${1:-}" == "--install" ]]; then
-  rm -rf "/Applications/Liquid Trader.app"
-  cp -R "$APP" /Applications/
-  echo "Installed to /Applications/Liquid Trader.app"
+  APPS="${LT_APPS_DIR:-/Applications}"
+  rm -rf "$APPS/Liquid Trader.app"
+  cp -R "$APP" "$APPS/"
+  echo "Installed to $APPS/Liquid Trader.app"
 fi
 echo "Open it with:  open \"${APP}\""

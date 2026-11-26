@@ -49,24 +49,37 @@ If you'd rather not build an app, double-click `run.command`, or run `python3 -m
 
 Until you add a key, the app runs on a realistic **simulated market** so you can learn the app and test strategies safely. The simulated market runs fast, so bots trade visibly.
 
-## Run 24/7
+## Use your Mac as the server (24/7)
 
-**Settings → 24/7 trading → Turn on 24/7 service** installs a `launchd` agent (`~/Library/LaunchAgents/com.liquidtrader.engine.plist`). The agent:
+One command sets your Mac up as an always-on trading server:
 
-- runs the trading engine in the background with no window (`--headless`), wrapped in `caffeinate -i -s` so the Mac doesn't idle-sleep,
-- starts at login and is restarted by macOS if it ever exits or crashes (`KeepAlive`),
-- resumes every bot that was running, and keeps re-testing the Liquid connection (bots keep their state across restarts),
-- lets you close the app window. Reopening the app reconnects to the running engine.
+```bash
+cd REA/liquid-trader
+./mac_server_setup.sh --at-boot
+```
 
-Only one engine can trade at a time. A lock file ensures that, so a second copy never double-trades your bots.
+| What | How |
+|---|---|
+| **Starts at power-on, before anyone logs in** | A boot-level launchd service (`/Library/LaunchDaemons/com.liquidtrader.engine.plist`) that runs as *your* user, not root. Your bots trade even if the Mac rebooted for a macOS update while you were away. |
+| **Never stops** | launchd restarts the engine if it exits. A watchdog restarts it if it hangs. Every fill is saved to disk the instant it happens. Bots resume automatically, and the engine reconnects to Liquid after network drops. |
+| **Never sleeps on power** | `pmset` sleep 0 on power (the screen can still turn off), plus `caffeinate` while the engine runs. |
+| **Comes back after a power cut** | `pmset autorestart 1`. Wake-for-network is turned on too. |
+| **Only one engine** | A lock file stops two copies from trading the same bots. Opening the app just connects the window to the running engine, and closing the window doesn't stop trading. |
+| **Fully reversible** | `./mac_server_setup.sh --undo` removes the service and restores your exact previous power settings. `--status` shows what's running. |
 
-From Terminal: `python3 -m liquid_trader --install-service` / `--uninstall-service`. Logs: `~/Library/Logs/LiquidTrader.log`. If you move the app after turning the service on, turn it off and on again.
+The script asks before changing power settings, and asks for your admin password once. Before login the Keychain is locked, so the boot service reads your API key from a private (0600) file in `~/Library/Application Support/LiquidTrader` instead.
 
-> **The Mac has to stay on and online.** For trading that's truly 24/7, run the engine on a cloud server instead (next section).
+**Good to know:**
+- **FileVault:** if it's on and the power goes out, the Mac stops at the FileVault unlock screen until someone types the password. Nothing can run before that. macOS updates and normal restarts are fine. If you need unattended recovery from power cuts, put the Mac on a small UPS (battery backup).
+- **Laptops:** closing the lid still puts a MacBook to sleep unless an external display is connected. `./mac_server_setup.sh --at-boot --lid-closed` keeps it awake with the lid shut. Only do that plugged in, on a desk with airflow, never in a bag.
+- **Internet:** wired Ethernet is more reliable than Wi-Fi for a server.
+- **Phone alerts:** add an ntfy link in **Settings → Phone alerts** so you hear about trades and problems while you're away.
 
-## Run it on a cloud server (truly 24/7)
+Prefer not to change system settings? **Settings → 24/7 trading → Turn on 24/7 service** in the app installs a login-level service with no admin rights needed. It only runs while you're logged in. You can also run `./mac_server_setup.sh` without `--at-boot`.
 
-The engine runs on a small Linux server, and your Mac just views the dashboard. Trading continues while your Mac is off, asleep or travelling.
+## Alternative: a cloud server
+
+If you'd rather not keep a Mac running, the engine can live on a small Linux server instead, and your Mac just views the dashboard.
 
 **1. Rent a small Linux server.** Choose **Ubuntu 24.04**, the smallest size (1 vCPU / 1 GB RAM is plenty), and add your SSH key when you create it. Any of these work:
 
