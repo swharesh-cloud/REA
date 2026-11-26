@@ -115,6 +115,24 @@ ssh root@YOUR_SERVER_IP 'systemctl stop liquid-trader'            # stop trading
 
 > Run each bot in **one** place only. If the same live bot runs on your Mac and on the server, it trades twice. `--migrate-bots` offers to turn off the Mac's background service for you.
 
+### On AWS, in 2 minutes from your browser (AWS CloudShell)
+
+You don't need to give anyone your AWS keys. Sign in to the AWS console, open **CloudShell** (the `>_` icon in the top bar), and run:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/swharesh-cloud/REA/claude/liquid-trader-mac/liquid-trader/deploy/aws_launch.sh
+curl -fsSLO https://raw.githubusercontent.com/swharesh-cloud/REA/claude/liquid-trader-mac/liquid-trader/deploy/aws_userdata.sh
+bash aws_launch.sh "ssh-ed25519 AAAA...your Mac's public key..."
+```
+
+(Your public key is the output of `cat ~/.ssh/id_ed25519.pub` on your Mac. If that file doesn't exist, create it with `ssh-keygen -t ed25519`.) The script creates a `t3.micro` Ubuntu 24.04 server and installs the app at first boot. The server has:
+
+- an encrypted disk, termination protection and a static Elastic IP,
+- a security group that only allows SSH (no open dashboard port),
+- an alarm that automatically recovers the instance onto healthy hardware if the host fails.
+
+It then prints the next two commands: `deploy.sh ubuntu@IP` to add your Liquid key, alerts and bots, and `dashboard.sh ubuntu@IP`. Choose a region with `AWS_REGION=...` before `bash`. Expect roughly $8–10/month: instance + 10 GB disk + IPv4 address.
+
 ### Alternative: Docker
 
 ```bash
